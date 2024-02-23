@@ -25,7 +25,3 @@ You can install these packages using R commands like:
 install.packages(c("terra", "Rhdf5lib", "sf"))
 
 
-### Customization Notes
-
-- **Repository URL**: Replace `[repository-url]` with the actual URL where this project is hosted.
-- **License**: Adjust the licensing information according to the actual license of your project. If it's not MIT, replace the reference to the MIT
