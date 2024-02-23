@@ -31,16 +31,15 @@ bash
 
 git clone https://github.com/M-Fox-Wethington/FrostBound_AQ.git
 
-Usage
+### Usage:
 
-    Place your HDF5 files containing Sea Ice Concentration data in the staged directory within D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-E_2/.
-    Run the ProcessSeaIceDataToGeoTIFF.R script in R:
+Place your HDF5 files containing Sea Ice Concentration data in the staged directory within D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-E_2/.
 
-r
+Run the ProcessSeaIceDataToGeoTIFF.R script in R:
 
 source("Path/To/ProcessSeaIceDataToGeoTIFF.R")
 
-    Processed GeoTIFF files will be saved in the Processed directory, organized into subdirectories by year and month.
+Processed GeoTIFF files will be saved in the Processed directory, organized into subdirectories by year and month.
 
 
 ```r
