@@ -27,35 +27,49 @@ install.packages(c("terra", "Rhdf5lib", "sf"))
 ### Downloading Data
 
     Visit the NSIDC data page for the AMSR-E/AMSR2 dataset at NSIDC AU_SI12.
-    Download the HDF5 (.he5) files for the dates and measurements you are interested in analyzing.
-    Save the downloaded HDF5 files to a directory on your local machine, such as D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-E_2/staged/tmp.
+    Download the HDF5 (.he5) files from (https://nsidc.org/data/au_si12/versions/1)
+    Save the downloaded HDF5 files to a directory on your local machine.
+
 
 ### Running the Script
 
-    Clone this repository or download the ProcessSeaIceDataToGeoTIFF.R script to your local machine.
+After downloading the `ProcessSeaIceDataToGeoTIFF.R` script and placing your HDF5 files in the desired directory, follow these steps to process your data:
 
-```git
-git clone https://github.com/M-Fox-Wethington/FrostBound_AQ.git
-```
+1. **Open RStudio or another R environment** of your choice. If you don't have RStudio, you can download it from [RStudio's official site](https://www.rstudio.com/products/rstudio/download/).
 
-Modify the hdf5_dir variable in the script to point to the directory where you saved the downloaded HDF5 files.
+2. **Set your working directory** to the location where you saved the script. You can do this by using the `setwd()` function in R. For example:
 
-Open an R session and set the working directory to where the script is located, or use setwd() to change the working directory to the script's location.
+    ```r
+    setwd("C:/path/to/script")
+    ```
 
-Run the script in your R session:
+    Replace `"C:/path/to/script"` with the actual path where you have saved the `ProcessSeaIceDataToGeoTIFF.R` script.
 
-```r
-    source("Path/To/ProcessSeaIceDataToGeoTIFF.R")
-```
+3. **Load the script** into your R session. You can do this by using the `source()` function, which will execute the script and load the `process_hdf5_file` function into your environment:
 
-The script will automatically process each HDF5 file, creating GeoTIFF outputs organized into year and month subdirectories within a specified Processed directory.
-For Novice R Users
+    ```r
+    source("ProcessSeaIceDataToGeoTIFF.R")
+    ```
 
-If you are new to R, here are a few tips to get started:
+4. **Prepare the list of HDF5 files** you want to process. The script expects a directory containing HDF5 (.he5) files. Ensure you have modified the `hdf5_dir` variable in the script to point to your directory of HDF5 files, or adjust the script to use a variable path.
 
-    R Installation: Download and install R from CRAN, the Comprehensive R Archive Network.
-    RStudio: Consider using RStudio, an integrated development environment (IDE) for R, to make script editing and execution easier.
-    Learning R: Numerous free resources are available online to learn R, including R for Data Science and the Introduction to R manual.
+5. **Call the `process_hdf5_file` function** for each HDF5 file you wish to process. If you have multiple files and want to automate this process, you can use the `list.files()` function to generate a list of file paths and then use `lapply()` to apply the processing function to each file, as shown in the script:
+
+    ```r
+    hdf5_files <- list.files(hdf5_dir, pattern = "\\.he5$", full.names = TRUE)
+    lapply(hdf5_files, process_hdf5_file)
+    ```
+
+    This command lists all `.he5` files in the specified directory and then processes each file, converting it to a GeoTIFF and saving it in the designated output directory.
+
+### Tips for Novice R Users
+
+- **Ensure all required libraries are installed**: Before running the script, make sure you have installed all required R packages (`terra`, `rhdf5`, `sf`) using the `install.packages()` function.
+- **Check your file paths**: File paths in R use forward slashes (`/`) or double backslashes (`\\`). Ensure your paths are correctly formatted to avoid errors.
+- **Use RStudio for a better experience**: RStudio provides a user-friendly interface for R, making script execution and debugging more manageable.
+
+By following these steps, even those new to R should be able to successfully run the script and process their sea ice concentration data.
+
 
 
 Acknowledgments
