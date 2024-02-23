@@ -21,7 +21,26 @@ Ensure you have R installed on your system, along with the following R packages:
 
 You can install these packages using R commands like:
 
-```r
 install.packages(c("terra", "Rhdf5lib", "sf"))
 
+### Installation
 
+Clone this repository to your local machine using:
+
+bash
+
+git clone https://github.com/M-Fox-Wethington/FrostBound_AQ.git
+
+Usage
+
+    Place your HDF5 files containing Sea Ice Concentration data in the staged directory within D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-E_2/.
+    Run the ProcessSeaIceDataToGeoTIFF.R script in R:
+
+r
+
+source("Path/To/ProcessSeaIceDataToGeoTIFF.R")
+
+    Processed GeoTIFF files will be saved in the Processed directory, organized into subdirectories by year and month.
+
+
+```r
