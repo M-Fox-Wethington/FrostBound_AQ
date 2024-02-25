@@ -4,7 +4,7 @@ library(rhdf5)   # For reading HDF5 files, a format commonly used for storing co
 library(sf)      # For handling spatial vector data (e.g., points, lines, polygons)
 
 # Define a function to process a single HDF5 file
-process_hdf5_file <- function(h5_file) {
+process_hdf5_file <- function(h5_file, input_dir, output_dir) {
   # Extract the date from the file path using regex, assuming YYYYMMDD format before ".he5"
   date_pattern <- ".*(\\d{4})(\\d{2})(\\d{2})\\.he5$"
   date <- sub(date_pattern, "\\1-\\2-\\3", basename(h5_file))
@@ -15,7 +15,7 @@ process_hdf5_file <- function(h5_file) {
   month <- date_parts[2]
   
   # Create a new subdirectory path based on the year and month
-  new_subdir <- paste0("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/tmp/", year, "/", month, "/")
+  new_subdir <- paste0(output_dir, year, "/", month, "/")
   
   # Ensure the new subdirectory exists, if not, create it
   if (!dir.exists(new_subdir)) {
@@ -74,10 +74,12 @@ process_hdf5_file <- function(h5_file) {
 }
 
 # Directory containing HDF5 files
-hdf5_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/tmp/"
-
+input_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/Staged/"
+output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/Processed/"
+  
+  
 # List all HDF5 files in the directory
-hdf5_files <- list.files(hdf5_dir, pattern = "\\.he5$", full.names = TRUE)
+hdf5_files <- list.files(input_dir, pattern = "\\.he5$", full.names = TRUE)
 
 # Apply the processing function to each HDF5 file
 lapply(hdf5_files, process_hdf5_file)
