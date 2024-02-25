@@ -15,7 +15,7 @@ process_hdf5_file <- function(h5_file) {
   month <- date_parts[2]
   
   # Create a new subdirectory path based on the year and month
-  new_subdir <- paste0("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/Processed/", year, "/", month, "/")
+  new_subdir <- paste0("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/tmp/", year, "/", month, "/")
   
   # Ensure the new subdirectory exists, if not, create it
   if (!dir.exists(new_subdir)) {
@@ -50,7 +50,9 @@ process_hdf5_file <- function(h5_file) {
   sic_points_sf_transformed <- st_transform(sic_points_sf, crs = "EPSG:3412")
   
   # Create a raster template with dimensions and extent matching the spatial points
-  r_corrected <- rast(nrows=632, ncols=664, xmin=-3943750, xmax=3943750, ymin=-3943750, ymax=4343750, crs="EPSG:3412")
+  # r_corrected <- rast(nrows=632, ncols=664, xmin=-3943750, xmax=3943750, ymin=-3943750, ymax=4343750, crs="EPSG:3412")
+  r_corrected <- rast(nrows=664, ncols=632, xmin=-3950000, xmax=3950000, ymin=-3950000, ymax=4350000, crs="EPSG:3412")
+  
   
   # Rasterize the transformed point data onto the raster template
   r_sic <- rasterize(sic_points_sf_transformed, r_corrected, field="SIC", fun=mean)
@@ -72,7 +74,7 @@ process_hdf5_file <- function(h5_file) {
 }
 
 # Directory containing HDF5 files
-hdf5_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-E_2/staged/tmp"
+hdf5_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/tmp/"
 
 # List all HDF5 files in the directory
 hdf5_files <- list.files(hdf5_dir, pattern = "\\.he5$", full.names = TRUE)
