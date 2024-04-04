@@ -82,4 +82,5 @@ output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/Process
 hdf5_files <- list.files(input_dir, pattern = "\\.he5$", full.names = TRUE)
 
 # Apply the processing function to each HDF5 file
-lapply(hdf5_files, process_hdf5_file)
+# Use an anonymous function within lapply to include all required arguments
+lapply(hdf5_files, function(file) process_hdf5_file(file, input_dir, output_dir))
