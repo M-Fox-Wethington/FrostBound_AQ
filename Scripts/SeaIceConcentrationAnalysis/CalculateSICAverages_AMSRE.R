@@ -19,7 +19,7 @@ calculateSICaveragesForRegion <- function(raster_stack, region_shp_path, out_dir
   masked_stack <- mask(raster_stack, region)
   
   # Convert the pixel values to represent SIC percentages (original scale is 0-1000)
-  data.SIC <- (masked_stack / 10) 
+  masked_stack[masked_stack > 100] <- NA
   
   # Initialize a list to store SIC data frames
   sic_list <- list()
@@ -86,4 +86,3 @@ calculateSICaveragesForRegion(
   region_shp_path = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/CCAMLR_MPA_Planning_Domains_WAP.shp",
   out_dir = "D:/Manuscripts_localData/FrostBound_AQ/Results"
 )
-
