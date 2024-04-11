@@ -22,7 +22,7 @@ library(dplyr) # For data manipulation and analysis
 # }
 
 # Define the directory containing the raster files
-raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSRE-Unified_Winter_Processed"
+raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSRE-Unified_Winter_Processed_Subset"
 # List all .tif raster files in the directory
 raster_files <- list.files(path = raster_dir, pattern = "\\.tif$", full.names = TRUE)
 
@@ -50,3 +50,21 @@ print(names(raster_stack))
 # the use of dplyr for data manipulation and analysis.
 df <- as.data.frame(raster_stack, xy = TRUE, na.rm = TRUE) %>%
   mutate(Date = names(raster_stack)[1]) # Add a 'Date' column based on the layer names
+
+
+# Define the path for saving the raster stack
+output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSRE-Unified_Winter_Processed_Subset/stack/AMSR-E-Unified_Winter_SIC_Stack_Subset.tif"
+
+# Use writeRaster to save the raster stack
+writeRaster(raster_stack, filename = output_path, overwrite = TRUE)
+
+# Load the raster stack back into R
+# loaded_raster_stack <- rast(output_path)
+
+# Print summary to check
+print(loaded_raster_stack)
+
+str(df)
+head(df)
+
+gc()
