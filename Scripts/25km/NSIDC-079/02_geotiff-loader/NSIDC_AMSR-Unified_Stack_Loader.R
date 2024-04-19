@@ -30,19 +30,20 @@ names(raster_stack) <- sapply(raster_files, function(x) format(extractDate(x), "
 dates <- as.Date(sapply(raster_files, extractDate))
 time(raster_stack) <- dates
 
-# Ensure CRS matches, clip and mask
-region_shp_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/CCAMLR_MPA_Planning_Domains_WAP.shp"
-region <- vect(region_shp_path)
-sample_raster <- raster_stack[[1]]
-if (crs(region) != crs(sample_raster)) {
-  region <- project(region, crs(sample_raster))
-}
-clipped_stack <- crop(raster_stack, ext(region))
-clipped_stack <- mask(clipped_stack, region)
+# # Ensure CRS matches, clip and mask
+# region_shp_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/CCAMLR_MPA_Planning_Domains_WAP.shp"
+# region <- vect(region_shp_path)
+# sample_raster <- raster_stack[[1]]
+# if (crs(region) != crs(sample_raster)) {
+#   region <- project(region, crs(sample_raster))
+# }
+# clipped_stack <- crop(raster_stack, ext(region))
+# clipped_stack <- mask(clipped_stack, region)
 
 # Save and reload the raster stack
 output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NASA_Bootstrap_sic/raster-stack/NASA_Bootstrap_SIC_Time_Series.nc"
-writeCDF(clipped_stack, filename = output_path, overwrite = TRUE)
+# writeCDF(clipped_stack, filename = output_path, overwrite = TRUE)
+writeCDF(raster_stack, filename = output_path, overwrite = TRUE)
 
 loaded_stack <- rast(output_path)
 print(loaded_stack)

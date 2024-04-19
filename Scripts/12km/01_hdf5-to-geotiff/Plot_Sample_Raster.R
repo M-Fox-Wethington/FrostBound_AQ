@@ -1,12 +1,28 @@
 # Specify the path to the raster file
-raster_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Data/Processed/NSIDC-AU_SI12_SeaIce_12km_20120703.tif"  # Change YYYYMMDD to the actual date in your filename
+raster_path <- "C:/Users/wethi/OneDrive/Desktop/scratch/NSIDC_079_25km_Scratch/NSIDC0079_SEAICE_PS_S25km_20120703_v4.0.tif"  # Change YYYYMMDD to the actual date in your filename
 
 # Load the raster file
 sic_raster <- rast(raster_path)
 
 
+
+# Calculate the total area using expanse
+total_area <- expanse(sic_raster)
+print(total_area)
+
+
 # Check the raster and print basic information
 print(sic_raster)
+
+
+# Get the area of each cell
+cell_areas <- cellSize(sic_raster)  # returns areas in square kilometers
+
+# If you need to calculate the total area from individual cell areas
+total_area_from_cells <- sum(values(cell_areas), na.rm=TRUE)
+print(total_area_from_cells)
+
+
 
 # Correct way to find the minimum and maximum values in the raster
 raster_min <- min(values(sic_raster), na.rm = TRUE)

@@ -25,6 +25,7 @@ process_netcdf_file <- function(nc_file, input_dir, output_dir) {
       
       values(sic_raster)[values(sic_raster) == 1100] <- NA  # Missing data
       values(sic_raster)[values(sic_raster) == 1200] <- NA  # Land or ice-shelf
+      values(sic_raster)[values(sic_raster) == 0] <- NA  # Land or ice-shelf
       
       # Use the filename from the input for the output
       output_filename <- gsub(input_dir, output_dir, nc_file)
