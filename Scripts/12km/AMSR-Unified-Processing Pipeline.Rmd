@@ -1,0 +1,288 @@
+---
+title: "Frostbound_AQ-File Processing"
+author: "Michael Wethington"
+date: "2024-04-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+#Convert He5 Files to Geotiff 
+1. Reclassify sentinel values
+
+
+```{r}
+
+
+# Load required libraries
+library(terra)   # For spatial data analysis and raster manipulation
+library(rhdf5)   # For reading HDF5 files
+library(sf)      # For handling spatial vector data
+library(doParallel)
+library(foreach)
+
+
+
+# Ensure output directory exists
+
+output_dir <-  "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/processed"
+
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+
+# Define a function to process a single HDF5 file
+process_hdf5_file <- function(h5_file, input_dir, output_dir) {
+  # Extract the date from the file path using regex, assuming YYYYMMDD format before ".he5"
+  date_pattern <- ".*(\\d{4})(\\d{2})(\\d{2})\\.he5$"
+  date <- sub(date_pattern, "\\1-\\2-\\3", basename(h5_file))
+  
+  # Read Sea Ice Concentration data and apply scale factor
+  SeaIce_scaled <- h5read(h5_file, "/HDFEOS/GRIDS/SpPolarGrid12km/Data Fields/SI_12km_SH_ICECON_DAY")
+  
+  #Reclassify sentinel values
+  # Set value ranges based on documentation
+  SeaIce_scaled[SeaIce_scaled == 110] <- NA  # Missing data
+  SeaIce_scaled[SeaIce_scaled == 120] <- NA  # Land
+  
+  # Read spatial dimension data for georeferencing
+  lat <- h5read(h5_file, "/HDFEOS/GRIDS/SpPolarGrid12km/lat")
+  lon <- h5read(h5_file, "/HDFEOS/GRIDS/SpPolarGrid12km/lon")
+  
+  # Flatten the matrices to vectors
+  SeaIce_vec <- as.vector(SeaIce_scaled)
+  lat_vec <- as.vector(lat)
+  lon_vec <- as.vector(lon)
+  
+  # Combine vectors into a data frame and convert to an 'sf' object
+  sic_points <- data.frame(lon = lon_vec, lat = lat_vec, SIC = SeaIce_vec)
+  sic_points_sf <- st_as_sf(sic_points, coords = c("lon", "lat"), crs = 4326, agr = "constant")
+  
+  # Transform geographic coordinates to the Antarctic Polar Stereographic South projection (EPSG:3412)
+  sic_points_sf_transformed <- st_transform(sic_points_sf, crs = "EPSG:3976")
+  
+  # Create a raster template with dimensions and extent matching the spatial points
+  r_corrected <- rast(nrows=664, ncols=632, xmin=-3950000, xmax=3950000, ymin=-3950000, ymax=4350000, crs="EPSG:3412")
+  
+  # Rasterize the transformed point data onto the raster template
+  r_sic <- rasterize(sic_points_sf_transformed, r_corrected, field="SIC", fun=mean)
+  
+  # Define the reclassification matrix
+  # rcl_matrix <- matrix(c(110, NA, 120, NA), ncol = 2, byrow = TRUE)
+  # r_sic <- terra::classify(r_sic, rcl_matrix)
+  
+  # Define the output filename using the output directory and date
+  output_filename <- paste0(output_dir, "/AMSR-Unified_SeaIce_12km_", gsub("-", "", date), ".tif")
+  
+  # Save the GeoTIFF in the output directory
+  writeRaster(r_sic, filename=output_filename, overwrite = TRUE)
+  
+  print(paste0("Raster:", output_filename, " exported"))
+  
+  # Clear memory of large objects no longer needed
+  rm(date, date_pattern, r_sic, sic_points, sic_points_sf, sic_points_sf_transformed, SeaIce_scaled, SeaIce_vec, lat, lat_vec, lon, lon_vec)
+  
+  # Explicitly call garbage collection to free up memory space
+  gc()
+}
+
+
+# Setup parallel environment
+numCores <- detectCores()
+cl <- makeCluster(numCores - 1)
+registerDoParallel(cl)
+
+
+
+# Directory containing HDF5 files
+input_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/staged"
+
+
+
+# List all HDF5 files in the directory
+hdf5_files <- list.files(input_dir, pattern = "\\.he5$", full.names = TRUE)
+
+# Apply the processing function to each HDF5 file in parallel
+results <- foreach(h5_file = hdf5_files, .packages = c("terra", "rhdf5", "sf")) %dopar% {
+  process_hdf5_file(h5_file, input_dir, output_dir)
+}
+
+# Stop the cluster
+stopCluster(cl)
+```
+
+
+Pull (Clip) raster masks of the study area 
+```{r}
+# Load required libraries
+library(terra)   # For spatial data analysis and raster manipulation
+
+# Define directories
+input_raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/processed"
+output_raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/processed"
+
+# Ensure output directory exists
+if (!dir.exists(output_raster_dir)) {
+  dir.create(output_raster_dir, recursive = TRUE)
+}
+
+# Load the study area shapefile
+study_area_shp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/Frostbound_AQ_Subregions_EPSG_3976.shp"
+study_area <- vect(study_area_shp)
+
+# List all raster files in the input directory and sort them by date
+raster_files <- list.files(path = input_raster_dir, pattern = "\\.tif$", full.names = TRUE)
+
+# Function to extract date from filename for sorting
+extractDate <- function(filename) {
+  # Regex to extract date assuming format YYYYMMDD in filename
+  dates <- as.Date(sub(".*(\\d{4})(\\d{2})(\\d{2}).*", "\\1-\\2-\\3", basename(filename)), format="%Y-%m-%d")
+  return(dates)
+}
+
+# Sort files by date
+raster_files <- raster_files[order(sapply(raster_files, extractDate))]
+
+# Process each raster file
+for (file in raster_files) {
+  r <- rast(file)
+  # Crop raster to the extent of the study area
+  r_cropped <- crop(r, study_area)
+  
+  # Define the output filename using the original file's name
+  output_filename <- file.path(output_raster_dir, basename(file))
+  
+  # Save the cropped raster to the output directory
+  writeRaster(r_cropped, filename=output_filename, overwrite=TRUE)
+  
+  cat("Processed and saved:", output_filename, "\n")
+}
+
+```
+
+#Load Geotiffs into Raster Stack
+```{r}
+library(terra)
+
+# Define the function to extract dates
+extractDate <- function(filename) {
+  base_name <- basename(filename)
+  date_string <- sub(".*_12km_(\\d{8}).*", "\\1", base_name)
+  return(as.Date(date_string, format="%Y%m%d"))
+}
+
+
+# Load raster files
+raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/processed-clipped"
+raster_files <- list.files(path = raster_dir, pattern = "\\.tif$", full.names = TRUE)
+raster_files <- raster_files[order(sapply(raster_files, extractDate))]
+
+# Create a raster stack
+raster_stack <- rast(lapply(raster_files, rast))
+names(raster_stack) <- sapply(raster_files, function(x) format(extractDate(x), "%Y-%m-%d"))
+
+# Assigning time values
+dates <- as.Date(sapply(raster_files, extractDate))
+time(raster_stack) <- dates
+
+
+
+# Save and reload the raster stack
+output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/AMSR-Unified_SIC_Full-Catalog_Time_Series_SubRegions.nc"
+# writeCDF(clipped_stack, filename = output_path, overwrite = TRUE)
+writeCDF(raster_stack, filename = output_path, overwrite = TRUE)
+
+loaded_stack <- rast(output_path)
+print(loaded_stack)
+print(time(loaded_stack))
+
+
+# Assuming 'loaded_stack' is your loaded SpatRaster with supposed time data
+time_data <- time(loaded_stack)
+if (length(time_data) > 0 && !all(is.na(time_data))) {
+  print("Time data are present and appear correctly set.")
+  print(head(time_data, 20))  # Print the first 20 time entries to verify
+} else {
+  print("No valid time data found or all entries are NA.")
+}
+
+```
+
+
+#Iterate through raster stack to pull initial metrics:
+
+1. Scene-wide Daily Sea Ice Concentration Average
+2. Scene-wide Sea Ice Extent
+3. Scene-wide Sea Ice Area
+```{r}
+library(terra)        # For raster data manipulation
+library(doParallel)   # For parallel processing
+library(foreach)      # For looping with parallel support
+
+# Function to calculate mean SIC and sea ice extent for a given raster layer within a file
+calculate_layer_stats <- function(layer_index, file_path) {
+  raster_stack <- rast(file_path)                  # Dynamically load the raster stack from file
+  layer_data <- raster_stack[[layer_index]]        # Extract the specific layer
+  layer_date <- time(layer_data)                   # Extract date from layer metadata
+  
+  # Replace 0 with NA
+  values(layer_data)[values(layer_data) == 0] <- NA
+  
+  # Calculate mean SIC excluding NAs and determine ice extent
+  mean_sic <- as.numeric(terra::global(layer_data, fun = 'mean', na.rm = TRUE))
+  cell_area_sq_meters <- prod(res(layer_data))    # Calculate the area of one cell in square meters
+  valid_ice_cells <- sum(values(layer_data) >= 15, na.rm = TRUE)  # Count cells with valid ice concentration
+  
+  # Convert total ice area to square kilometers
+  total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6
+  
+  rm(raster_stack, layer_data)   # Clear memory
+  gc()                           # Run garbage collection
+  
+  return(list(mean_sic = mean_sic, ice_extent_km = total_ice_area_sq_km, date = layer_date))
+}
+
+# Directory and file path setup
+r_fp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/AMSR-Unified_SIC_Full-Catalog_Time_Series_SubRegions.nc"
+
+# Set up parallel computing
+cl <- makeCluster(detectCores() - 1)
+registerDoParallel(cl)
+
+# Send necessary function and file path to all workers
+clusterExport(cl, varlist = c("calculate_layer_stats", "r_fp"))
+
+# Perform calculations in parallel with error handling
+results <- foreach(i = 1:nlyr(rast(r_fp)), .packages = 'terra', .errorhandling = "pass") %dopar% {
+  tryCatch({
+    calculate_layer_stats(i, r_fp)
+  }, error = function(e) {
+    return(list(error = TRUE, message = e$message))
+  })
+}
+
+# Stop the cluster after the task is done to free up resources
+stopCluster(cl)
+
+# Handling results and constructing the final dataframe
+result_df <- do.call(rbind, lapply(results, function(x) {
+  if (!is.null(x$error)) {
+    return(data.frame(Date = NA, MeanSIC = NA, IceExtent_km = NA, error = x$message))
+  } else {
+    return(data.frame(Date = x$date, MeanSIC = x$mean_sic, IceExtent_km = x$ice_extent_km, error = NA))
+  }
+}))
+
+# Save results to CSV and RDS for further use
+write.csv(result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/12km_AMSR-Unified_Subregion_Metrics.csv", row.names = FALSE)
+saveRDS(result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/12km_AMSR-Unified_Subregion_Metrics.rds")
+
+# Display some of the results for verification
+print(head(result_df))
+
+```
+
