@@ -1,0 +1,246 @@
+---
+title: "NSIDC_Sea-Ice-Index_Processing Pipeline"
+author: "Michael Wethington"
+date: "2024-04-21"
+output: html_document
+---
+
+Source Data Concentration Surface Classification Values:
+
+# SIC: 0-1000
+# Pole hole: 2510
+# Coast line: 2530
+# Land: 2540
+# Missing 2550
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Reproject the downloaded tifs to EPSG:3976
+```{r include=FALSE}
+# Load required libraries
+library(terra)   # For spatial data analysis and raster manipulation
+
+# Define directories
+input_raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/staged"
+output_raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/processed"
+
+# Ensure output directory exists
+if (!dir.exists(output_raster_dir)) {
+  dir.create(output_raster_dir, recursive = TRUE)
+}
+
+# List all raster files in the input directory
+raster_files <- list.files(path = input_raster_dir, pattern = "\\.tif$", full.names = TRUE)
+
+# Ensure the output directory exists
+if (!dir.exists(output_raster_dir)) {
+  dir.create(output_raster_dir, recursive = TRUE)
+}
+
+# List all raster files in the input directory
+raster_files <- list.files(path = input_raster_dir, pattern = "\\.tif$", full.names = TRUE)
+
+# Process each raster file
+for (file in raster_files) {
+  r <- rast(file)  # Load the raster file
+  
+
+  # Reproject the raster to EPSG 3976
+  r_reprojected <- project(r, crs("EPSG:3976"))
+
+  # Define the output filename using the original file's name
+  output_filename <- file.path(output_raster_dir, basename(file))
+  
+  # Save the reprojected raster to the output directory
+  writeRaster(r_reprojected, filename=output_filename, overwrite=TRUE)
+  
+  cat("Reprojected to EPSG:3976 and saved:", output_filename, "\n")
+}
+```
+
+
+
+Pull (Clip) raster masks of the study area 
+```{r}
+# Load required libraries
+library(terra)   # For spatial data analysis and raster manipulation
+
+# Define directories
+input_raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/processed"
+
+output_raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/processed_clipped"
+
+# Ensure output directory exists
+if (!dir.exists(output_raster_dir)) {
+  dir.create(output_raster_dir, recursive = TRUE)
+}
+
+# Load the study area shapefile
+study_area_shp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/Frostbound_AQ_Subregions_EPSG_3976.shp"
+study_area <- vect(study_area_shp)
+
+# List all raster files in the input directory and sort them by date
+raster_files <- list.files(path = input_raster_dir, pattern = "\\.tif$", full.names = TRUE)
+
+# Function to extract date from filename for sorting
+extractDate <- function(filename) {
+  # Regex to extract date assuming format YYYYMMDD in filename
+  dates <- as.Date(sub(".*(\\d{4})(\\d{2})(\\d{2}).*", "\\1-\\2-\\3", basename(filename)), format="%Y-%m-%d")
+  return(dates)
+}
+
+# Sort files by date
+raster_files <- raster_files[order(sapply(raster_files, extractDate))]
+
+# Process each raster file
+for (file in raster_files) {
+  r <- rast(file)
+  # Crop raster to the extent of the study area
+  r_cropped <- crop(r, study_area)
+  
+  # Define the output filename using the original file's name
+  output_filename <- file.path(output_raster_dir, basename(file))
+  
+  # Save the cropped raster to the output directory
+  writeRaster(r_cropped, filename=output_filename, overwrite=TRUE)
+  
+  cat("Processed and saved:", output_filename, "\n")
+}
+
+```
+
+
+
+#Convert to Raster Stack
+
+```{r} 
+
+library(terra)
+
+# Function to extract the date from a filename
+extractDate <- function(filename) {
+  base_name <- basename(filename)
+  date_string <- sub("S_(\\d{8})_.*", "\\1", base_name)
+  date_converted <- as.Date(date_string, format="%Y%m%d")
+  if (is.na(date_converted)) {
+    warning("Date conversion failed for: ", base_name)
+  }
+  return(date_converted)
+}
+
+# Define the directory with raster files
+raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/processed_clipped"
+
+raster_files <- list.files(path = raster_dir, pattern = "\\.tif$", full.names = TRUE)
+raster_files <- raster_files[order(sapply(raster_files, extractDate))]
+
+# Create a raster stack
+raster_stack <- rast(raster_files)
+
+# Naming layers by date extracted from filenames
+names(raster_stack) <- sapply(raster_files, function(x) format(extractDate(x), "%Y-%m-%d"))
+
+# Assigning time values
+dates <- as.Date(sapply(raster_files, extractDate))
+time(raster_stack) <- dates
+
+# Set values outside 0-1000 and specific feature values to NA
+# Pole hole: 2510
+# Coast line: 2530
+# Land: 2540
+# Missing 2550
+
+values_to_exclude <- c(2510, 2530, 2540, 2550)  # Other non-ice values
+raster_stack[raster_stack %in% values_to_exclude] <- NA
+
+# Ignore values less than 150 (1-15% concentration)
+raster_stack[raster_stack < 150] <- NA
+
+# Scale the values from 0-1000 to 0-100% for percentage representation
+raster_stack <- raster_stack / 10
+
+
+
+# Load and print the saved raster stack to verify
+loaded_stack <- raster_stack
+print(loaded_stack)
+print(time(loaded_stack))
+
+# # Load and print the saved raster stack to verify
+# loaded_stack <- rast(output_path)
+# print(loaded_stack)
+# print(time(loaded_stack))
+
+# Check and print time data for verification
+if (length(time(loaded_stack)) > 0 && !all(is.na(time(loaded_stack)))) {
+  print("Time data are present and appear correctly set.")
+  print(head(time(loaded_stack), 20))  # Print the first 20 time entries to verify
+} else {
+  print("No valid time data found or all entries are NA.")
+}
+
+# Output file path for NetCDF
+nc_output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/raster-stack/NSIDC-Sea-Ice-Index_25km_SIC_Time_Series_Subregions.nc"
+
+# Write the processed raster stack to a NetCDF file
+writeCDF(raster_stack, filename = nc_output_path, overwrite = TRUE, varname="sea_ice_concentration", 
+         longname="Sea Ice Concentration")
+
+# # Load and print the saved raster stack to verify
+# loaded_stack <- rast(nc_output_path)
+# print(loaded_stack)
+# print(time(loaded_stack))
+# 
+# # Check and print time data for verification
+# if (length(time(loaded_stack)) > 0 && !all(is.na(time(loaded_stack)))) {
+#   print("Time data are present and appear correctly set.")
+#   print(head(time(loaded_stack), 20))  # Print the first 20 time entries to verify
+# } else {
+#   print("No valid time data found or all entries are NA.")
+# }
+
+```
+
+
+
+
+#Combine Chunks to Create Single dataset that overlaps with NSIDC Sea Ice Index
+
+```{r }
+# Load the terra package
+library(terra)
+
+# Specify the file paths
+file1 <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/raster-stack/Chunk_2003-10-26.nc"
+file2 <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/raster-stack/Chunk_2014-01-21.nc"
+
+# Load the raster files
+raster1 <- rast(file1)
+raster2 <- rast(file2)
+
+# Define the cutoff date
+cutoff_date <- as.Date("2012-07-03")
+
+# Extract the time range from raster layers
+time_info1 <- time(raster1)
+time_info2 <- time(raster2)
+
+# Filter layers by time
+selected_layers1 <- raster1[time_info1 >= cutoff_date]
+selected_layers2 <- raster2[time_info2 >= cutoff_date]  # Assuming there is overlap; adjust if the whole file is needed
+
+# Combine the selected layers from both files
+combined_raster <- merge(selected_layers1, selected_layers2)
+
+# Save the combined raster to a new .nc file
+output_file <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/raster-stack/Combined_Post_2012-07-03.nc"
+writeRaster(combined_raster, filename = output_file, format = "CDF", overwrite = TRUE)
+
+print(paste("Combined raster written to:", output_file))
+
+```
+
+
