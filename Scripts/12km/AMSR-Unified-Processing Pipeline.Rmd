@@ -363,3 +363,42 @@ writeCDF(annual_winter_mean_raster, annual_raststack_output_path, varname="Winte
 
 ```
 
+
+#Plot Annual Raster Trend
+```{r}
+
+library(terra)
+library(stats)
+library(RColorBrewer)
+
+
+
+
+# Assuming annual_winter_mean_raster is already loaded
+# This SpatRaster has one layer for each year
+
+# Create a time vector corresponding to each layer
+# Assume each layer corresponds to successive years starting from a specific year
+start_year <- 2012  # Adjust according to your data
+end_year <- start_year + nlyr(annual_winter_mean_raster) - 1
+time_vector <- start_year:end_year
+
+
+
+# Create a diverging color palette
+diverging_palette <- colorRampPalette(RColorBrewer::brewer.pal(11, "RdBu"))(100)
+diverging_palette <- rev(diverging_palette)  # Reverse the palette
+
+# Plot the slope layer
+plot(trend_raster[["x"]], main="Trend of Annual Winter Sea Ice Concentration (Slope)",
+     col=diverging_palette,
+     breaks=seq(from=-5, to=5, by=0.1))  # Adjust the breaks for better color mapping
+
+# Manually add a legend
+legend("bottomright", title="Change per Year", 
+       legend=c("Decrease", "Increase"), 
+       fill=c(diverging_palette[1], diverging_palette[100]), 
+       border=NULL, bty="n", cex=0.8)
+
+
+```
