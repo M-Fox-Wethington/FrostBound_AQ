@@ -126,12 +126,12 @@ raster_stack <- raster_stack / 10
 amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/AMSR-Unified_SIC_Full-Catalog_Time_Series_Subregions.nc")
 
 # Resample the NSIDC dataset to match the resolution of the AMSR dataset using bilinear interpolation
-nsidc_resampled <- resample(loaded_stack, amsr_stack, method = "bilinear")
+nsidc_resampled <- resample(raster_stack, amsr_stack, method = "bilinear")
 
 # Verify time data in the loaded stack
-if (length(time(loaded_stack)) > 0 && !all(is.na(time(loaded_stack)))) {
+if (length(time(raster_stack)) > 0 && !all(is.na(time(loaded_stack)))) {
   print("Time data are present and appear correctly set.")
-  print(head(time(loaded_stack), 20))  # Print the first 20 time entries to verify
+  print(head(time(raster_stack), 20))  # Print the first 20 time entries to verify
 } else {
   print("No valid time data found or all entries are NA.")
 }
@@ -217,6 +217,7 @@ writeCDF(annual_winter_mean_raster, annual_raststack_output_path, varname="Winte
 
 
 ```
+
 
 
 
