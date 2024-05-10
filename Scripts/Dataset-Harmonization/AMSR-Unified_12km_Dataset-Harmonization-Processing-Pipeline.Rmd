@@ -9,16 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-**How is this different from the standard pipeline?**
 
-1. All Sea ice concentration values (0-100) area retained. NASA white pages indicate that values less than 15 are unreliable for sea ice concentration. In this case they have been retained in order to have the maximum cell-level daily comparison between AMSR and Sea Ice Index
-2. Sea Ice Index Coastline mask is applied to the AMSR dataset in order to ensure proper overlap in cells.  
-
-
-
-
-
-**Processing Pipeline**
 Step 1:
   Create a 12.5 km coastline mask from the NSIDC Sea Ice Index 25 km dataset 
 
@@ -155,7 +146,6 @@ stopCluster(cl)
 Step 3:
   Clip Geotiffs to Study Area using raster mask function
 
-
 ```{r}
 # Load required libraries
 library(terra)   # For spatial data analysis and raster manipulation
@@ -205,43 +195,12 @@ for (file in raster_files) {
 
 ```
 
-Step 4:
-  Mask out the NSIDC 25 km Coastline from the AMSR rasters
-  
-```{r}
-
-# Load the terra library
-library(terra)
-
-# Step 1: Load the coastline mask raster
-coastline_mask <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR_Study_Area_Coastline.tif")
-
-# Step 2: Load the .nc raster stack
-nc_raster_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/AMSR-Unified_SIC_Full-Catalog_Time_Series_Subregions.nc")
-
-# Check alignment and resample if necessary
-  coastline_mask_resampled <- resample(coastline_mask, nc_raster_stack, method="near")
 
 
-# Step 3: Create a binary mask (assuming 2530 is the coastline)
-binary_mask <- ifel(coastline_mask_resampled == 2530, NA, 1)
+**Step 4**
 
-# Step 4: Apply the mask to the entire raster stack
-masked_nc_raster_stack <- mask(nc_raster_stack, binary_mask, maskvalue=1)
-
-# Step 5: Save the masked raster stack if needed
-writeCDF(masked_nc_raster_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/AMSR-Unified_12km_Harmonization.nc", overwrite=TRUE)
-
-# Print a confirmation
-print("The coastline mask has been applied to the entire raster stack and the masked stack has been saved.")
-
-
-```
-
-
-Step 4:
 #Load Geotiffs into Raster Stack
-```{r}
+```{r include=FALSE}
 library(terra)
 library(lubridate)
 
@@ -255,7 +214,8 @@ extractDate <- function(filename) {
 
 
 # Load raster files
-raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/processed"
+raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/processed-clipped"
+
 raster_files <- list.files(path = raster_dir, pattern = "\\.tif$", full.names = TRUE)
 raster_files <- raster_files[order(sapply(raster_files, extractDate))]
 
@@ -266,8 +226,6 @@ names(raster_stack) <- sapply(raster_files, function(x) format(extractDate(x), "
 # Assigning time values
 dates <- as.Date(sapply(raster_files, extractDate))
 time(raster_stack) <- dates
-
-
 
 
 # Load the NSIDC dataset to use to compare dates
@@ -333,6 +291,39 @@ if (length(time_data) > 0 && !all(is.na(time_data))) {
 
 
 
+**Step 5**
+
+ #  Mask out the NSIDC 25 km Coastline from the AMSR rasters
+  
+```{r}
+
+# Load the terra library
+library(terra)
+
+# Step 1: Load the coastline mask raster
+coastline_mask <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR_Study_Area_Coastline.tif")
+
+# Step 2: Load the .nc raster stack
+nc_raster_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/stack/AMSR-Unified_Subregion_Harmonization_Winter.nc")
+
+# Check alignment and resample if necessary
+  coastline_mask_resampled <- resample(coastline_mask, nc_raster_stack, method="near")
+
+
+# Step 3: Create a binary mask (assuming 2530 is the coastline)
+binary_mask <- ifel(coastline_mask_resampled == 2530, NA, 1)
+
+# Step 4: Apply the mask to the entire raster stack
+masked_nc_raster_stack <- mask(nc_raster_stack, binary_mask, maskvalue=1)
+
+# Step 5: Save the masked raster stack if needed
+writeCDF(masked_nc_raster_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/AMSR-Unified_12km_Harmonization.nc", overwrite=TRUE)
+
+# Print a confirmation
+print("The coastline mask has been applied to the entire raster stack and the masked stack has been saved.")
+
+
+```
 
 
 

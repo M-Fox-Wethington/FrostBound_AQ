@@ -1,0 +1,222 @@
+---
+title: "NSIDC-Sea-Ice-Index_Dataset-Harmonization_Processing-Pipeline"
+author: "Michael J. Wethington"
+date: "2024-05-10"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Outline: 
+
+Input: NSIDC Sea Ice Index geotiffs
+
+Steps:
+    Collect Directory of Geotiffs and collate into a Terra Spatraster Stack
+    Assign Names by Layer Date using source geotiff filenames
+    Use Dates to Create Time attribute for each layer (for time series analysis)
+    Rescale raw data to 1-100 for percentage
+    Reclassify sentinel values to NA
+    Resample to match AMSR 12.5 km resolution
+    Subset raster stack to only winter months
+    Note: Input data is EPSG 3976 (same as AMSR-unified 12.5 km)
+
+```{r include=FALSE}
+# Load required libraries
+library(terra)   # For spatial data analysis and raster manipulation
+
+# Define directories
+input_raster_dir <-  "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/staged_epsg-3412"
+output_raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/staged_epsg-3976"
+
+# Ensure output directory exists
+if (!dir.exists(output_raster_dir)) {
+  dir.create(output_raster_dir, recursive = TRUE)
+}
+
+# List all raster files in the input directory
+raster_files <- list.files(path = input_raster_dir, pattern = "\\.tif$", full.names = TRUE)
+
+
+# Process each raster file
+for (file in raster_files) {
+  r <- rast(file)  # Load the raster file
+  
+  # Reproject the raster to EPSG 3976
+  r_reprojected <- project(r, crs("EPSG:3976"))
+
+  # Define the output filename using the original file's name
+  output_filename <- file.path(output_raster_dir, basename(file))
+  
+  # Save the reprojected raster to the output directory
+  writeRaster(r_reprojected, filename=output_filename, overwrite=TRUE)
+  
+  cat("Reprojected to EPSG:3976 and saved:", output_filename, "/n")
+}
+
+```
+
+
+
+**Step 2** 
+
+    Convert Sentinel values to NA
+    Convert files to Geotiff layers
+
+# Set values outside 0-1000 and specific feature values to NA
+# Pole hole: 2510
+# Coast line: 2530
+# Land: 2540
+# Missing 2550
+
+
+```{r} 
+
+library(terra)
+library(lubridate)
+
+# Define a function to extract the date from filenames using a regular expression pattern
+extractDate <- function(filename) {
+  base_name <- basename(filename)
+  date_string <- sub("S_(\\d{8})_.*", "\\1", base_name)
+  date_converted <- as.Date(date_string, format="%Y%m%d")
+  if (is.na(date_converted)) {
+    warning("Date conversion failed for: ", base_name)
+  }
+  return(date_converted)
+}
+
+
+
+# Set the directory containing the raster files
+raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/staged_epsg-3976"
+
+# List raster files sorted by date extracted from their filenames
+raster_files <- list.files(path = raster_dir, pattern = "\\.tif$", full.names = TRUE)
+raster_files <- raster_files[order(sapply(raster_files, extractDate))]
+
+# Create a raster stack from the sorted files
+raster_stack <- rast(raster_files)
+
+# Assign layer names in the raster stack based on dates extracted from filenames
+names(raster_stack) <- sapply(raster_files, function(x) format(extractDate(x), "%Y-%m-%d"))
+
+# Set time attribute for each layer in the stack using extracted dates
+dates <- as.Date(sapply(raster_files, extractDate))
+time(raster_stack) <- dates
+
+
+# Set values outside 0-1000 and specific feature values to NA
+# Pole hole: 2510
+# Coast line: 2530
+# Land: 2540
+# Missing 2550
+
+# Set specific values representing non-sea ice features to NA in the raster data
+values_to_exclude <- c(2510, 2530, 2540, 2550)  # Define non-ice values
+raster_stack[raster_stack %in% values_to_exclude] <- NA
+
+# Scale pixel values from a 0-1000 scale to a percentage scale (0-100%)
+raster_stack <- raster_stack / 10
+
+# Load the AMSR dataset
+amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/AMSR-Unified_SIC_Full-Catalog_Time_Series_Subregions.nc")
+
+# Resample the NSIDC dataset to match the resolution of the AMSR dataset using bilinear interpolation
+nsidc_resampled <- resample(loaded_stack, amsr_stack, method = "bilinear")
+
+# Verify time data in the loaded stack
+if (length(time(loaded_stack)) > 0 && !all(is.na(time(loaded_stack)))) {
+  print("Time data are present and appear correctly set.")
+  print(head(time(loaded_stack), 20))  # Print the first 20 time entries to verify
+} else {
+  print("No valid time data found or all entries are NA.")
+}
+
+# Subset both datasets for Antarctic winter months (June, July, August, September)
+winter_months <- c(6, 7, 8, 9)
+amsr_winter_stack <- amsr_stack[[month(time(amsr_stack)) %in% winter_months]]
+nsidc_winter_stack <- nsidc_resampled[[month(time(nsidc_resampled)) %in% winter_months]]
+
+# Find and subset by intersecting dates in winter datasets
+intersect_dates <- as.Date(time(nsidc_winter_stack)) %in% as.Date(time(amsr_winter_stack))
+nsidc_winter_subset <- nsidc_winter_stack[[intersect_dates]]
+
+# Define the output path for the NetCDF file
+nc_output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/stack/NSIDC-Sea-Ice-Index_25km_Continental_Harmonization.nc"
+
+# Write the subsetted and processed raster stack to a NetCDF file
+writeCDF(nsidc_winter_subset, filename = nc_output_path, overwrite = TRUE, varname="sea_ice_concentration", longname="Sea Ice Concentration")
+
+
+```
+
+
+
+**Generatge Monthly/Annual Aggregate Averages**
+
+```{r}
+
+library(terra)
+library(sf)
+
+# Load the raster stack
+r_fp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/stack/NSIDC-Sea-Ice-Index_25km_Continental_Harmonization_Winter.nc"
+r_stack <- rast(r_fp)
+
+
+# Define winter months for the Southern Hemisphere
+winter_months <- c("06", "07", "08", "09")
+
+# Prepare containers for results
+winter_monthly_means <- list()
+annual_winter_means <- list()
+
+# Extract dates, years, and months
+dates <- as.Date(time(r_stack))
+years <- format(dates, "%Y")
+months <- format(dates, "%m")
+
+# Aggregate by winter months for each year
+for (year in unique(years)) {
+  # Calculate mean for each winter month individually
+  for (month in winter_months) {
+    idx <- which(years == year & months == month)
+    if (length(idx) > 0) {
+      winter_monthly_means[[paste(year, month, sep="-")]] <- mean(r_stack[[idx]], na.rm = TRUE)
+    }
+  }
+  
+  # Calculate mean for the entire winter season each year
+  winter_idx <- which(years == year & months %in% winter_months)
+  if (length(winter_idx) > 0) {
+    annual_winter_means[[year]] <- mean(r_stack[[winter_idx]], na.rm = TRUE)
+  }
+}
+
+# Convert lists of rasters to SpatRasters
+winter_monthly_mean_raster <- rast(winter_monthly_means)
+annual_winter_mean_raster <- rast(annual_winter_means)
+
+# Name layers by year-month for monthly and by year for seasonal
+names(winter_monthly_mean_raster) <- names(winter_monthly_means)
+names(annual_winter_mean_raster) <- names(annual_winter_means)
+
+
+# Paths for output NetCDF files
+month_raststack_output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/stack/substack/25km_Sea-Ice-Index_harmonization_winter_monthly_mean_extent.nc"
+
+annual_raststack_output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/stack/substack/25km_Sea-Ice-Index_harmonization_winter_annual_mean_extent.nc"
+
+# Write results to NetCDF files using writeCDF
+writeCDF(winter_monthly_mean_raster, month_raststack_output_path, varname="Winter_Monthly_Mean_SIC", overwrite=TRUE)
+writeCDF(annual_winter_mean_raster, annual_raststack_output_path, varname="Winter_Annual_Mean_SIC", overwrite=TRUE)
+
+
+```
+
+
+
