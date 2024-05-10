@@ -1,0 +1,451 @@
+---
+title: "12.5 km Harmonization"
+author: "Michael Wethington"
+date: "2024-04-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**How is this different from the standard pipeline?**
+
+1. All Sea ice concentration values (0-100) area retained. NASA white pages indicate that values less than 15 are unreliable for sea ice concentration. In this case they have been retained in order to have the maximum cell-level daily comparison between AMSR and Sea Ice Index
+2. Sea Ice Index Coastline mask is applied to the AMSR dataset in order to ensure proper overlap in cells.  
+
+
+
+
+
+**Processing Pipeline**
+Step 1:
+  Create a 12.5 km coastline mask from the NSIDC Sea Ice Index 25 km dataset 
+
+```{r}
+
+# Load the terra library
+library(terra)
+
+# Step 1: Load the coastline raster
+coastline_raster <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/staged/S_20120704_concentration_v3.0.tif")
+
+# # Step 2: Load the .nc raster
+nc_raster <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/AMSR-Unified_SIC_Full-Catalog_Time_Series_Subregions.nc")
+
+
+reclassified_raster <- ifel(coastline_raster == 2530, 2530, NA)
+
+# Step 3: Resample the coastline raster to match the resolution of the .nc raster
+resampled_coastline <- resample(reclassified_raster, nc_raster, method="bilinear")
+
+writeRaster(resampled_coastline, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR_Study_Area_Coastline.tif", overwrite=TRUE)
+```
+
+
+#Step 2: 
+    Take He5 files
+    Reclassify missing data and land sentinel values to NA
+    Ensure projection to 3976
+    Convert to Geotiff and export to "proccessed
+
+
+
+```{r}
+
+
+# Load required libraries
+library(terra)   # For spatial data analysis and raster manipulation
+library(rhdf5)   # For reading HDF5 files
+library(sf)      # For handling spatial vector data
+library(doParallel)
+library(foreach)
+
+
+#Define output directory
+output_dir <-  "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/processed-unclipped"
+
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+
+# Define a function to process a single HDF5 file
+process_hdf5_file <- function(h5_file, input_dir, output_dir) {
+  # Extract the date from the file path using regex, assuming YYYYMMDD format before ".he5"
+  date_pattern <- ".*(\\d{4})(\\d{2})(\\d{2})\\.he5$"
+  date <- sub(date_pattern, "\\1-\\2-\\3", basename(h5_file))
+  
+  # Read Sea Ice Concentration data and apply scale factor
+  SeaIce_scaled <- h5read(h5_file, "/HDFEOS/GRIDS/SpPolarGrid12km/Data Fields/SI_12km_SH_ICECON_DAY")
+  
+  #Reclassify sentinel values
+  # Set value ranges based on documentation
+  SeaIce_scaled[SeaIce_scaled == 110] <- NA  # Missing data
+  SeaIce_scaled[SeaIce_scaled == 120] <- NA  # Land
+  
+  # Read spatial dimension data for georeferencing
+  lat <- h5read(h5_file, "/HDFEOS/GRIDS/SpPolarGrid12km/lat")
+  lon <- h5read(h5_file, "/HDFEOS/GRIDS/SpPolarGrid12km/lon")
+  
+  # Flatten the matrices to vectors
+  SeaIce_vec <- as.vector(SeaIce_scaled)
+  lat_vec <- as.vector(lat)
+  lon_vec <- as.vector(lon)
+  
+  # Combine vectors into a data frame and convert to an 'sf' object
+  sic_points <- data.frame(lon = lon_vec, lat = lat_vec, SIC = SeaIce_vec)
+  sic_points_sf <- st_as_sf(sic_points, coords = c("lon", "lat"), crs = 4326, agr = "constant")
+  
+  # Transform geographic coordinates to the Antarctic Polar Stereographic South projection (EPSG:3412)
+  sic_points_sf_transformed <- st_transform(sic_points_sf, crs = "EPSG:3976")
+  
+  # Create a raster template with dimensions and extent matching the spatial points
+  r_corrected <- rast(nrows=664, ncols=632, xmin=-3950000, xmax=3950000, ymin=-3950000, ymax=4350000, crs="EPSG:3412")
+  
+  # Rasterize the transformed point data onto the raster template
+  r_sic <- rasterize(sic_points_sf_transformed, r_corrected, field="SIC", fun=mean)
+  
+  # Define the reclassification matrix
+  # rcl_matrix <- matrix(c(110, NA, 120, NA), ncol = 2, byrow = TRUE)
+  # r_sic <- terra::classify(r_sic, rcl_matrix)
+  
+  # Define the output filename using the output directory and date
+  output_filename <- paste0(output_dir, "/AMSR-Unified_SeaIce_12km_", gsub("-", "", date), ".tif")
+  
+  # Save the GeoTIFF in the output directory
+  writeRaster(r_sic, filename=output_filename, overwrite = TRUE)
+  
+  print(paste0("Raster:", output_filename, " exported"))
+  
+  # Clear memory of large objects no longer needed
+  rm(date, date_pattern, r_sic, sic_points, sic_points_sf, sic_points_sf_transformed, SeaIce_scaled, SeaIce_vec, lat, lat_vec, lon, lon_vec)
+  
+  # Explicitly call garbage collection to free up memory space
+  gc()
+}
+
+
+# Setup parallel environment
+numCores <- detectCores()
+cl <- makeCluster(numCores - 1)
+registerDoParallel(cl)
+
+
+
+# Directory containing HDF5 files
+input_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/staged"
+
+
+
+# List all HDF5 files in the directory
+hdf5_files <- list.files(input_dir, pattern = "\\.he5$", full.names = TRUE)
+
+# Apply the processing function to each HDF5 file in parallel
+results <- foreach(h5_file = hdf5_files, .packages = c("terra", "rhdf5", "sf")) %dopar% {
+  process_hdf5_file(h5_file, input_dir, output_dir)
+}
+
+# Stop the cluster
+stopCluster(cl)
+```
+
+
+
+Step 3:
+  Clip Geotiffs to Study Area using raster mask function
+
+
+```{r}
+# Load required libraries
+library(terra)   # For spatial data analysis and raster manipulation
+
+# Define directories
+input_raster_dir <-  "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/processed-unclipped"
+output_raster_dir <-  "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/processed-clipped"
+
+
+
+# Ensure output directory exists
+if (!dir.exists(output_raster_dir)) {
+  dir.create(output_raster_dir, recursive = TRUE)
+}
+
+# Load the study area shapefile
+study_area_shp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/Frostbound_AQ_Subregions_EPSG_3976.shp"
+study_area <- vect(study_area_shp)
+
+# List all raster files in the input directory and sort them by date
+raster_files <- list.files(path = input_raster_dir, pattern = "\\.tif$", full.names = TRUE)
+
+# Function to extract date from filename for sorting
+extractDate <- function(filename) {
+  # Regex to extract date assuming format YYYYMMDD in filename
+  dates <- as.Date(sub(".*(\\d{4})(\\d{2})(\\d{2}).*", "\\1-\\2-\\3", basename(filename)), format="%Y-%m-%d")
+  return(dates)
+}
+
+# Sort files by date
+raster_files <- raster_files[order(sapply(raster_files, extractDate))]
+
+# Process each raster file
+for (file in raster_files) {
+  r <- rast(file)
+  # Crop raster to the extent of the study area
+  r_cropped <- crop(r, study_area)
+  
+  # Define the output filename using the original file's name
+  output_filename <- file.path(output_raster_dir, basename(file))
+  
+  # Save the cropped raster to the output directory
+  writeRaster(r_cropped, filename=output_filename, overwrite=TRUE)
+  
+  cat("Processed and saved:", output_filename, "\n")
+}
+
+```
+
+Step 4:
+  Mask out the NSIDC 25 km Coastline from the AMSR rasters
+  
+```{r}
+
+# Load the terra library
+library(terra)
+
+# Step 1: Load the coastline mask raster
+coastline_mask <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR_Study_Area_Coastline.tif")
+
+# Step 2: Load the .nc raster stack
+nc_raster_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/AMSR-Unified_SIC_Full-Catalog_Time_Series_Subregions.nc")
+
+# Check alignment and resample if necessary
+  coastline_mask_resampled <- resample(coastline_mask, nc_raster_stack, method="near")
+
+
+# Step 3: Create a binary mask (assuming 2530 is the coastline)
+binary_mask <- ifel(coastline_mask_resampled == 2530, NA, 1)
+
+# Step 4: Apply the mask to the entire raster stack
+masked_nc_raster_stack <- mask(nc_raster_stack, binary_mask, maskvalue=1)
+
+# Step 5: Save the masked raster stack if needed
+writeCDF(masked_nc_raster_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/AMSR-Unified_12km_Harmonization.nc", overwrite=TRUE)
+
+# Print a confirmation
+print("The coastline mask has been applied to the entire raster stack and the masked stack has been saved.")
+
+
+```
+
+
+Step 4:
+#Load Geotiffs into Raster Stack
+```{r}
+library(terra)
+library(lubridate)
+
+# Define the function to extract dates
+extractDate <- function(filename) {
+  base_name <- basename(filename)
+  date_string <- sub(".*_12km_(\\d{8}).*", "\\1", base_name)
+  return(as.Date(date_string, format="%Y%m%d"))
+}
+
+
+
+# Load raster files
+raster_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/processed"
+raster_files <- list.files(path = raster_dir, pattern = "\\.tif$", full.names = TRUE)
+raster_files <- raster_files[order(sapply(raster_files, extractDate))]
+
+# Create a raster stack
+raster_stack <- rast(lapply(raster_files, rast))
+names(raster_stack) <- sapply(raster_files, function(x) format(extractDate(x), "%Y-%m-%d"))
+
+# Assigning time values
+dates <- as.Date(sapply(raster_files, extractDate))
+time(raster_stack) <- dates
+
+
+
+
+# Load the NSIDC dataset to use to compare dates
+nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/NSIDC-Sea-Ice-Index_25km_SIC_Time_Series_Subregions.nc")
+
+# Extract dates from the time attribute and convert to Date objects
+amsr_dates <- as.Date(time(raster_stack))
+nsidc_dates <- as.Date(time(nsidc_stack))
+
+# Define winter months: June, July, August, September
+winter_months <- c(6, 7, 8, 9)
+
+# Filter dates for winter months
+amsr_winter_dates <- amsr_dates[month(amsr_dates) %in% winter_months]
+nsidc_winter_dates <- nsidc_dates[month(nsidc_dates) %in% winter_months]
+
+# Subset stacks based on filtered dates
+amsr_winter_stack <- raster_stack[[month(amsr_dates) %in% winter_months]]
+nsidc_winter_stack <- nsidc_stack[[month(nsidc_dates) %in% winter_months]]
+
+# Check the resulting subsets
+print(amsr_winter_stack)
+print(nsidc_winter_stack)
+
+
+# Extract dates from the time attribute and convert to Date objects
+amsr_winter_dates <- as.Date(time(amsr_winter_stack))
+nsidc_winter_dates <- as.Date(time(nsidc_winter_stack))
+
+# Find dates in NSIDC that are also in AMSR
+intersect_dates <- amsr_winter_dates %in% nsidc_winter_dates
+
+# Subset NSIDC stack by intersecting dates
+amsr_winter_subset <- amsr_winter_stack[[intersect_dates]]
+
+# Check the resulting subset
+print(amsr_winter_subset)
+
+
+
+# Save and Winter raster stack
+output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/stack/AMSR-Unified_Subregion_Harmonization_Winter.nc"
+writeCDF(raster_stack, filename = output_path, overwrite = TRUE)
+
+loaded_stack <- rast(output_path)
+print(loaded_stack)
+print(time(loaded_stack))
+
+
+# Assuming 'loaded_stack' is your loaded SpatRaster with supposed time data
+time_data <- time(loaded_stack)
+if (length(time_data) > 0 && !all(is.na(time_data))) {
+  print("Time data are present and appear correctly set.")
+  print(head(time_data, 20))  # Print the first 20 time entries to verify
+} else {
+  print("No valid time data found or all entries are NA.")
+}
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+#Generate Raster Products for Annual and Monthly Averages
+
+```{r}
+library(terra)
+library(sf)
+
+# Load the raster stack
+r_fp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/stack/AMSR-Unified_Continental_Harmonization_Winter.nc"
+r_stack <- rast(r_fp)
+
+# # Apply SIC > 15 filter directly on the stack
+# r_stack <- ifel(r_stack > 15, r_stack, NA)
+
+# Create a classification matrix to reclassify values
+# Values > 15 remain unchanged, <= 15 become NA
+# We create a matrix that specifically changes values <= 15 to NA
+# We assume SIC values are between 0 and 100, adjust if the scale is different
+# rclmat <- matrix(c(0, 15, NA, 16, 100, 16:100), ncol=3, byrow=TRUE)
+
+# Apply classification
+# r_classified <- classify(r_stack, rclmat)
+
+# # Ensure the time dimension is available and correctly formatted
+# if (is.na(time(r_stack)[1])) {
+#   message("Time dimension not properly set. Setting time dimension...")
+#   start_date <- as.Date("2012-07-03")  # Adjust according to your actual data
+#   time_values <- seq(start_date, length.out = nlyr(r_stack), by = "day")
+#   time(r_stack) <- time_values
+# }
+
+# Define winter months for the Southern Hemisphere
+winter_months <- c("06", "07", "08", "09")
+
+# Prepare containers for results
+winter_monthly_means <- list()
+annual_winter_means <- list()
+
+# Extract dates, years, and months
+dates <- as.Date(time(r_stack))
+years <- format(dates, "%Y")
+months <- format(dates, "%m")
+
+# Aggregate by winter months for each year
+for (year in unique(years)) {
+  # Calculate mean for each winter month individually
+  for (month in winter_months) {
+    idx <- which(years == year & months == month)
+    if (length(idx) > 0) {
+      winter_monthly_means[[paste(year, month, sep="-")]] <- mean(r_stack[[idx]], na.rm = TRUE)
+    }
+  }
+  
+  # Calculate mean for the entire winter season each year
+  winter_idx <- which(years == year & months %in% winter_months)
+  if (length(winter_idx) > 0) {
+    annual_winter_means[[year]] <- mean(r_stack[[winter_idx]], na.rm = TRUE)
+  }
+}
+
+# Convert lists of rasters to SpatRasters
+winter_monthly_mean_raster <- rast(winter_monthly_means)
+annual_winter_mean_raster <- rast(annual_winter_means)
+
+# Name layers by year-month for monthly and by year for seasonal
+names(winter_monthly_mean_raster) <- names(winter_monthly_means)
+names(annual_winter_mean_raster) <- names(annual_winter_means)
+
+
+# Paths for output NetCDF files
+month_raststack_output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/stack/substack/AMSR-Unified_harmonization_winter_monthly_mean_extent.nc"
+
+annual_raststack_output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/stack/substack/AMSR-Unified_harmonization_winter_annual_mean_extent.nc"
+
+# Write results to NetCDF files using writeCDF
+writeCDF(winter_monthly_mean_raster, month_raststack_output_path, varname="Winter_Monthly_Mean_SIC", overwrite=TRUE)
+writeCDF(annual_winter_mean_raster, annual_raststack_output_path, varname="Winter_Annual_Mean_SIC", overwrite=TRUE)
+
+
+```
+
+
+#Plot Annual Raster Trend
+```{r}
+library(terra)
+library(RColorBrewer)
+
+# Set values below 15 to NA
+r_stack[r_stack < 15] <- NA
+
+# Create a time vector corresponding to each layer (assuming annual data)
+start_year <- 2012  # Adjust according to your data
+time_vector <- start_year:(start_year + nlyr(r_stack) - 1)
+
+# Perform regression using only non-NA values
+trend_raster <- regress(r_stack, x=time_vector, formula=y~x, na.rm=TRUE)
+
+# Check the results
+names(trend_raster)
+
+# Plot the trend slopes (ensure the correct layer is referenced)
+diverging_palette <- colorRampPalette(RColorBrewer::brewer.pal(11, "RdBu"))(10)
+plot(trend_raster[["x"]], main="Trend of Annual Winter Sea Ice Concentration (Slope)",
+     col=rev(diverging_palette),
+     breaks=seq(from=-5, to=5, by=0.1), na.color="white")  # Adjust breaks and NA color as needed
+
+# Optionally add a legend
+legend("bottomright", legend=c("-5", "0", "5"), fill=c(diverging_palette[1], diverging_palette[50], diverging_palette[100]),
+       title="Change per Year", bty="n")
+
+```D:\Manuscripts_localData\FrostBound_AQ\Datasets\dataset-harmonization\12km_AMSR-Unified\stack\AMSR-Unified_Continental_Harmonization_Winter.nc"
