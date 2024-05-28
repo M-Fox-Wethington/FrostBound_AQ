@@ -237,6 +237,7 @@ nsidc_winter <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-
 
     1. Loop through the individual study area subregions (shapefile)
     2. Generate and export new raster stacks for each respective subregion
+    3. Export a copy of the "study area-wide" stack (NSIDC_25km_Full_Study_Area.nc)
 
 
 ```{r}
@@ -275,7 +276,7 @@ for (region in regions) {
 }
 
 
-# # Write the subset raster stack to a .nc file
+# # Write an individual stack for all regions included
 writeCDF(nsidc, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc", overwrite = TRUE)
 
 
