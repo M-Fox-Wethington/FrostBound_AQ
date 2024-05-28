@@ -1,0 +1,1086 @@
+---
+title: "Sea Ice Trend Analysis - NSIDC"
+author: "Michael Wethington"
+date: "2024-05-14"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+
+## **Dataset Overview**
+
+```{r Data Overview}
+
+
+# Print the object to see its structure
+print(nsidc_winter)
+
+# Summary of the object
+summary(nsidc_winter)
+
+# If it's a SpatRaster, use terra functions to explore further
+if (inherits(nsidc_winter, "SpatRaster")) {
+  # Check the number of layers
+  nlyr(nsidc_winter)
+  
+  # Extract dates from raster layer names or metadata
+  winter_dates <- time(nsidc_winter)
+
+# Extract unique months from the dates
+  unique_months <- unique(month(winter_dates))
+  
+  print(unique_months)
+  
+  # Get the names of the layers
+  names(nsidc_winter)
+  
+  # Plot a single layer
+  plot(nsidc_winter[[1]])
+  
+  # Get the extent of the raster
+  ext(nsidc_winter)
+  
+  # Get the resolution of the raster
+  res(nsidc_winter)
+  
+  # Check the CRS (Coordinate Reference System)
+  crs(nsidc_winter)
+} else {
+  print("The object is not a SpatRaster. Further exploration is needed.")
+}
+
+```
+
+
+
+
+**Calculate Regional Ice Extent Metrics (Parallel)**
+
+```{r Calculate Regional Ice Extent Metrics}
+# library(terra)        # For raster data manipulation
+# library(doParallel)   # For parallel processing
+# library(foreach)      # For looping with parallel support
+# 
+# # Function to calculate mean SIC and sea ice extent for a given raster layer within a file
+# calculate_layer_stats <- function(layer_index, file_path) {
+#   raster_stack <- rast(file_path)                  # Load the raster stack from file
+#   layer_data <- raster_stack[[layer_index]]        # Extract the specific layer
+#   
+#   layer_date <- time(layer_data)                   # Extract date from layer metadata
+#   
+#   mean_sic <- as.numeric(terra::global(layer_data, fun = 'mean', na.rm = TRUE))  # Calculate mean SIC excluding NAs
+#   
+#   cell_area_sq_meters <- prod(res(layer_data))    # Calculate the area of one cell in square meters
+#   
+# 
+#     
+#   total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6  # Convert total ice area to square kilometers
+#   
+#   rm(raster_stack, layer_data)   # Clear memory
+#   gc()                           # Run garbage collection
+#   
+#   # Extract region name from the file path
+#   region_name <- tools::file_path_sans_ext(basename(file_path))
+#   region_name <- sub("NSIDC_25km_", "", region_name)  # Adjust based on actual pattern in filenames
+#   
+#   return(list(mean_sic = mean_sic, ice_extent_km = total_ice_area_sq_km, date = layer_date, region = region_name))
+# }
+# 
+# # Directory with chunk files for each region
+# chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/substack"
+# chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)  # List all .nc files for each region
+# 
+# 
+# 
+# all_results <- list()  # Initialize list to store results from all chunks
+# 
+# for (r_fp in chunk_files) {
+#   numCores <- detectCores() - 1
+#   cl <- makeCluster(numCores)gma
+#   registerDoParallel(cl)
+#   
+#   clusterExport(cl, varlist = c("calculate_layer_stats", "r_fp"))
+#   
+#   results <- foreach(i = 1:nlyr(rast(r_fp)), .packages = 'terra', .errorhandling = "pass") %dopar% {
+#     tryCatch({
+#       calculate_layer_stats(i, r_fp)
+#     }, error = function(e) {
+#       return(list(error = TRUE, message = e$message))
+#     })
+#   }
+#   
+#   stopCluster(cl)
+#   
+#   # Append chunk results to overall results, add file path to results for region tracking
+#   all_results <- c(all_results, lapply(results, function(x) c(x, file = r_fp)))
+# }
+# 
+# # Convert list of all results into a dataframe, handling possible errors
+# final_result_df <- do.call(rbind, lapply(all_results, function(x) {
+#   if (!is.null(x$error)) {
+#     return(data.frame(Date = NA, MeanSIC = NA, IceExtent_km = NA, Region = NA, error = x$message))
+#   } else {
+#     return(data.frame(Date = x$date, MeanSIC = x$mean_sic, IceExtent_km = x$ice_extent_km, Region = x$region, error = NA))
+#   }
+# }))
+# 
+# 
+# 
+# # Add year, month, and day columns
+# final_result_df <- final_result_df %>%
+#   mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+# 
+# # Filter for Full_Study_Area and June, July, August, and September
+# final_result_df <- nsidc_metrics %>%
+#   filter(Month %in% c(6, 7, 8, 9))
+# 
+# 
+# # Save combined results to CSV and RDS for further use
+# write.csv(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.csv", row.names = FALSE)
+# saveRDS(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+
+
+library(terra)        # For raster data manipulation
+library(doParallel)   # For parallel processing
+library(foreach)      # For looping with parallel support
+library(dplyr)
+library(lubridate)
+
+# Function to calculate mean SIC and sea ice extent for a given raster layer within a file
+calculate_layer_stats <- function(layer_index, file_path) {
+  raster_stack <- rast(file_path)                  # Load the raster stack from file
+  layer_data <- raster_stack[[layer_index]]        # Extract the specific layer
+  
+  layer_date <- time(layer_data)                   # Extract date from layer metadata
+
+  # Handle sea ice concentration: treat cells < 15 as 0
+  layer_data[layer_data < 15] <- 0
+  
+  mean_sic <- as.numeric(terra::global(layer_data, fun = 'mean', na.rm = TRUE))  # Calculate mean SIC excluding NAs
+  
+  # Handle sea ice extent: count cells >= 15
+  valid_ice_cells <- sum(values(layer_data) >= 15, na.rm = TRUE)
+  cell_area_sq_meters <- prod(res(layer_data))    # Calculate the area of one cell in square meters
+  total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6  # Convert total ice area to square kilometers
+  
+  rm(raster_stack, layer_data)   # Clear memory
+  gc()                           # Run garbage collection
+  
+  # Extract region name from the file path
+  region_name <- tools::file_path_sans_ext(basename(file_path))
+  region_name <- sub("NSIDC_25km_", "", region_name)  # Adjust based on actual pattern in filenames
+  
+  return(list(mean_sic = mean_sic, ice_extent_km = total_ice_area_sq_km, date = layer_date, region = region_name))
+}
+
+# Directory with chunk files for each region
+chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/substack"
+chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)  # List all .nc files for each region
+
+all_results <- list()  # Initialize list to store results from all chunks
+
+for (r_fp in chunk_files) {
+  numCores <- detectCores() - 1
+  cl <- makeCluster(numCores)
+  registerDoParallel(cl)
+  
+  clusterExport(cl, varlist = c("calculate_layer_stats", "r_fp"))
+  
+  results <- foreach(i = 1:nlyr(rast(r_fp)), .packages = 'terra', .errorhandling = "pass") %dopar% {
+    tryCatch({
+      calculate_layer_stats(i, r_fp)
+    }, error = function(e) {
+      return(list(error = TRUE, message = e$message))
+    })
+  }
+  
+  stopCluster(cl)
+  
+  # Append chunk results to overall results, add file path to results for region tracking
+  all_results <- c(all_results, lapply(results, function(x) c(x, file = r_fp)))
+}
+
+# Convert list of all results into a dataframe, handling possible errors
+final_result_df <- do.call(rbind, lapply(all_results, function(x) {
+  if (!is.null(x$error)) {
+    return(data.frame(Date = NA, MeanSIC = NA, IceExtent_km = NA, Region = NA, error = x$message))
+  } else {
+    return(data.frame(Date = x$date, MeanSIC = x$mean_sic, IceExtent_km = x$ice_extent_km, Region = x$region, error = NA))
+  }
+}))
+
+# Add year, month, and day columns
+final_result_df <- final_result_df %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+
+# Filter for Full_Study_Area and June, July, August, and September
+final_result_df <- final_result_df %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Save combined results to CSV and RDS for further use
+write.csv(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.csv", row.names = FALSE)
+saveRDS(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+
+
+```
+
+
+## **Calculate Sea Ice Persistence**
+
+
+```{r Calculate Sea Ice Persistence}
+library(terra)
+library(lubridate)
+
+# Load the NSIDC sea ice concentration data
+nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/NSIDC_25km_Study-Area.nc")
+
+# Define a function to count days with ice cover > 15% for each year
+count_ice_days <- function(x) {
+  ice_days <- sum(x > 15, na.rm = TRUE)
+  return(ice_days)
+}
+
+# Extract the years from the time attribute using lubridate
+years <- unique(year(time(nsidc)))
+
+# Initialize an empty list to store the annual ice day count rasters
+annual_ice_days <- list()
+
+# Loop over each year, subset the raster stack, and apply the counting function
+for (year in years) {
+  year_rasters <- subset(nsidc, year(time(nsidc)) == year)
+  # Apply count_ice_days function across layers (days) at each pixel
+  ice_days_raster <- app(year_rasters, count_ice_days)  # No need for 'along=3', app inherently operates cell-wise
+  names(ice_days_raster) <- paste("Ice_Days", year, sep="_")
+  annual_ice_days[[year]] <- ice_days_raster
+  print(paste("Processed year:", year))
+}
+
+# Combine the annual rasters into a single stack
+annual_ice_days_stack <- rast(annual_ice_days)
+
+# Save the resulting stack to disk
+writeRaster(annual_ice_days_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/substack/Annual_Ice_Days_Stack.tif", overwrite=TRUE)
+
+
+```
+
+
+**Plot Sea Ice Persistence Trends**
+
+```{r Plot Sea Ice Persistence Trends}
+
+library(terra)
+library(RColorBrewer)
+
+# Assuming 'annual_ice_days_stack' is already loaded and contains the necessary layers
+
+# Define the color palette
+color_palette <- rev(brewer.pal(9, "Blues"))
+
+# Set up the multi-panel plot layout
+par(mfrow = c(2, 2))
+
+# Plot each year's data using a consistent color scale from 0 to 365 days
+plot(annual_ice_days_stack$Ice_Days_1988, main = "Ice Days 1988", col=color_palette, breaks=seq(0, 365, length.out = length(color_palette) + 1))
+plot(annual_ice_days_stack$Ice_Days_1990, main = "Ice Days 1995", col=color_palette, breaks=seq(0, 365, length.out = length(color_palette) + 1))
+plot(annual_ice_days_stack$Ice_Days_2020, main = "Ice Days 2020", col=color_palette, breaks=seq(0, 365, length.out = length(color_palette) + 1))
+plot(annual_ice_days_stack$Ice_Days_2023, main = "Ice Days 2023", col=color_palette, breaks=seq(0, 365, length.out = length(color_palette) + 1))
+
+# Reset the plot layout
+par(mfrow = c(1, 1))
+
+```
+
+
+Full Region
+
+```{r Full Region Annual Trend Visualization}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(wesanderson)
+library(scales)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+# Add year, month, and day columns
+nsidc_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+
+# Filter for Full_Study_Area and June, July, August, and September
+nsidc_metrics_filtered <- nsidc_metrics %>%
+  filter(Region == "Full_Study_Area" & Month %in% c(6, 7, 8, 9))
+
+# Add a month2 column with month names
+nsidc_metrics_filtered <- nsidc_metrics_filtered %>%
+  mutate(month2 = month(Date, label = TRUE, abbr = FALSE))
+
+# Choose a light red color for the SD bars
+sd_color <- "#7AB8BF"  # Light red color (you can adjust to your preferred shade)
+axis_color <- "gray70"  # Light gray color for the axis lines
+
+# Create the plot
+p <- nsidc_metrics_filtered %>%
+  group_by(month2, Year) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ggplot(aes(x = Year, y = mean_extent)) +
+  geom_errorbar(aes(ymin = mean_extent - sd_extent, ymax = mean_extent + sd_extent), 
+                width = 0.2, color = sd_color) +
+  geom_point(color = "black") +
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +
+  facet_wrap(~month2, scales = "fixed", ncol = 3) +
+  xlab(NULL) +
+  ylab(bquote("Ice extent" ~ (km^2 %*% 10^6))) +
+  scale_y_continuous(labels = scales::scientific) +
+  labs(
+    title = sprintf(
+      "Study Area Wide: Sea ice extent between %d and %d",
+      min(nsidc_metrics_filtered$Year),
+      max(nsidc_metrics_filtered$Year)
+    ),
+    subtitle = "The vertical bar at each point shows the standard deviation around the mean. The blue line represents the linear trend.",
+    caption = "Source: NSIDC 25km Sea Ice Index dataset"
+  ) +
+  theme(
+    plot.caption = element_text(size = 8, color = "black"),
+    plot.margin = unit(c(5.5, 10, 5.5, 5.5), "points"),
+    panel.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(colour = "black", size = 12, face = "bold"),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = axis_color),
+    legend.position = "none"
+  )
+
+print(p)
+# 
+# # Save the filtered data
+# write.csv(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.csv", row.names = FALSE)
+# saveRDS(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.rds")
+
+
+
+```
+
+
+Northern Shelf
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(wesanderson)
+library(scales)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+# Add year, month, and day columns
+nsidc_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+
+# Filter for Full_Study_Area and June, July, August, and September
+nsidc_metrics_filtered <- nsidc_metrics %>%
+  filter(Region == "Northern_Shelf_Region" & Month %in% c(6, 7, 8, 9))
+
+# Add a month2 column with month names
+nsidc_metrics_filtered <- nsidc_metrics_filtered %>%
+  mutate(month2 = month(Date, label = TRUE, abbr = FALSE))
+
+# Choose a light red color for the SD bars
+sd_color <- "#7AB8BF"  # Light red color (you can adjust to your preferred shade)
+axis_color <- "gray70"  # Light gray color for the axis lines
+
+# Create the plot
+p <- nsidc_metrics_filtered %>%
+  group_by(month2, Year) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ggplot(aes(x = Year, y = mean_extent)) +
+  geom_errorbar(aes(ymin = mean_extent - sd_extent, ymax = mean_extent + sd_extent), 
+                width = 0.2, color = sd_color) +
+  geom_point(color = "black") +
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +
+  facet_wrap(~month2, scales = "fixed", ncol = 3) +
+  xlab(NULL) +
+  ylab(bquote("Ice extent" ~ (km^2 %*% 10^6))) +
+  scale_y_continuous(labels = scales::scientific) +
+  labs(
+    title = sprintf(
+      "Northern Shelf Region: Sea ice extent between %d and %d",
+      min(nsidc_metrics_filtered$Year),
+      max(nsidc_metrics_filtered$Year)
+    ),
+    subtitle = "The vertical bar at each point shows the standard deviation around the mean. The blue line represents the linear trend.",
+    caption = "Source: NSIDC 25km Sea Ice Index dataset"
+  ) +
+  theme(
+    plot.caption = element_text(size = 8, color = "black"),
+    plot.margin = unit(c(5.5, 10, 5.5, 5.5), "points"),
+    panel.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(colour = "black", size = 12, face = "bold"),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = axis_color),
+    legend.position = "none"
+  )
+
+print(p)
+# 
+# # Save the filtered data
+# write.csv(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.csv", row.names = FALSE)
+# saveRDS(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.rds")
+
+```
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(wesanderson)
+library(scales)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+# Add year, month, and day columns
+nsidc_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+
+# Filter for Full_Study_Area and June, July, August, and September
+nsidc_metrics_filtered <- nsidc_metrics %>%
+  filter(Region == "Mid-Shelf_Region" & Month %in% c(6, 7, 8, 9))
+
+# Add a month2 column with month names
+nsidc_metrics_filtered <- nsidc_metrics_filtered %>%
+  mutate(month2 = month(Date, label = TRUE, abbr = FALSE))
+
+# Choose a light red color for the SD bars
+sd_color <- "#7AB8BF"  # Light red color (you can adjust to your preferred shade)
+axis_color <- "gray70"  # Light gray color for the axis lines
+
+# Create the plot
+p <- nsidc_metrics_filtered %>%
+  group_by(month2, Year) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ggplot(aes(x = Year, y = mean_extent)) +
+  geom_errorbar(aes(ymin = mean_extent - sd_extent, ymax = mean_extent + sd_extent), 
+                width = 0.2, color = sd_color) +
+  geom_point(color = "black") +
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +
+  facet_wrap(~month2, scales = "fixed", ncol = 3) +
+  xlab(NULL) +
+  ylab(bquote("Ice extent" ~ (km^2 %*% 10^6))) +
+  scale_y_continuous(labels = scales::scientific) +
+  labs(
+    title = sprintf(
+      "Middle Shelf Region: Sea ice extent between %d and %d",
+      min(nsidc_metrics_filtered$Year),
+      max(nsidc_metrics_filtered$Year)
+    ),
+    subtitle = "The vertical bar at each point shows the standard deviation around the mean. The blue line represents the linear trend.",
+    caption = "Source: NSIDC 25km Sea Ice Index dataset"
+  ) +
+  theme(
+    plot.caption = element_text(size = 8, color = "black"),
+    plot.margin = unit(c(5.5, 10, 5.5, 5.5), "points"),
+    panel.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(colour = "black", size = 12, face = "bold"),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = axis_color),
+    legend.position = "none"
+  )
+
+print(p)
+# 
+# # Save the filtered data
+# write.csv(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.csv", row.names = FALSE)
+# saveRDS(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.rds")
+
+```
+Southern Shelf Region Trends
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(wesanderson)
+library(scales)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+# Add year, month, and day columns
+nsidc_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+
+# Filter for Full_Study_Area and June, July, August, and September
+nsidc_metrics_filtered <- nsidc_metrics %>%
+  filter(Region == "Southern_Shelf_Region" & Month %in% c(6, 7, 8, 9))
+
+# Add a month2 column with month names
+nsidc_metrics_filtered <- nsidc_metrics_filtered %>%
+  mutate(month2 = month(Date, label = TRUE, abbr = FALSE))
+
+# Choose a light red color for the SD bars
+sd_color <- "#7AB8BF"  # Light red color (you can adjust to your preferred shade)
+axis_color <- "gray70"  # Light gray color for the axis lines
+
+# Create the plot
+p <- nsidc_metrics_filtered %>%
+  group_by(month2, Year) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ggplot(aes(x = Year, y = mean_extent)) +
+  geom_errorbar(aes(ymin = mean_extent - sd_extent, ymax = mean_extent + sd_extent), 
+                width = 0.2, color = sd_color) +
+  geom_point(color = "black") +
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +
+  facet_wrap(~month2, scales = "fixed", ncol = 3) +
+  xlab(NULL) +
+  ylab(bquote("Ice extent" ~ (km^2 %*% 10^6))) +
+  scale_y_continuous(labels = scales::scientific) +
+  labs(
+    title = sprintf(
+      "Southern Shelf Region: Sea ice extent between %d and %d",
+      min(nsidc_metrics_filtered$Year),
+      max(nsidc_metrics_filtered$Year)
+    ),
+    subtitle = "The vertical bar at each point shows the standard deviation around the mean. The blue line represents the linear trend.",
+    caption = "Source: NSIDC 25km Sea Ice Index dataset"
+  ) +
+  theme(
+    plot.caption = element_text(size = 8, color = "black"),
+    plot.margin = unit(c(5.5, 10, 5.5, 5.5), "points"),
+    panel.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(colour = "black", size = 12, face = "bold"),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = axis_color),
+    legend.position = "none"
+  )
+
+print(p)
+# 
+# # Save the filtered data
+# write.csv(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.csv", row.names = FALSE)
+# saveRDS(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.rds")
+```
+Offshore Trends
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(wesanderson)
+library(scales)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+# Add year, month, and day columns
+nsidc_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+
+# Filter for Full_Study_Area and June, July, August, and September
+nsidc_metrics_filtered <- nsidc_metrics %>%
+  filter(Region == "Offshore_Region" & Month %in% c(6, 7, 8, 9))
+
+# Add a month2 column with month names
+nsidc_metrics_filtered <- nsidc_metrics_filtered %>%
+  mutate(month2 = month(Date, label = TRUE, abbr = FALSE))
+
+# Choose a light red color for the SD bars
+sd_color <- "#7AB8BF"  # Light red color (you can adjust to your preferred shade)
+axis_color <- "gray70"  # Light gray color for the axis lines
+
+# Create the plot
+p <- nsidc_metrics_filtered %>%
+  group_by(month2, Year) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ggplot(aes(x = Year, y = mean_extent)) +
+  geom_errorbar(aes(ymin = mean_extent - sd_extent, ymax = mean_extent + sd_extent), 
+                width = 0.2, color = sd_color) +
+  geom_point(color = "black") +
+  geom_smooth(method = "lm", color = "blue", se = FALSE) +
+  facet_wrap(~month2, scales = "fixed", ncol = 3) +
+  xlab(NULL) +
+  ylab(bquote("Ice extent" ~ (km^2 %*% 10^6))) +
+  scale_y_continuous(labels = scales::scientific) +
+  labs(
+    title = sprintf(
+      "Offshore Region: Sea ice extent between %d and %d",
+      min(nsidc_metrics_filtered$Year),
+      max(nsidc_metrics_filtered$Year)
+    ),
+    subtitle = "The vertical bar at each point shows the standard deviation around the mean. The blue line represents the linear trend.",
+    caption = "Source: NSIDC 25km Sea Ice Index dataset"
+  ) +
+  theme(
+    plot.caption = element_text(size = 8, color = "black"),
+    plot.margin = unit(c(5.5, 10, 5.5, 5.5), "points"),
+    panel.background = element_rect(fill = "white"),
+    strip.background = element_rect(fill = "white"),
+    strip.text = element_text(colour = "black", size = 12, face = "bold"),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = axis_color),
+    legend.position = "none"
+  )
+
+print(p)
+# 
+# # Save the filtered data
+# write.csv(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.csv", row.names = FALSE)
+# saveRDS(nsidc_metrics_filtered, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics_filtered.rds")
+
+```
+
+
+
+## **Deprecated (Non-Parallel) Scripts**
+
+
+**Calculate Regional Ice Extent Metrics (Not Parallel)**
+
+```{r}
+
+library(terra)
+library(lubridate)
+
+# Load data
+nsidc_winter <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/NSIDC_25km_Winter_Months.nc")
+study_areas <- vect("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/Frostbound_AQ_Subregions_EPSG_3976.shp")
+
+# Define the calculation function
+calculate_layer_stats <- function(layer_data, region = NULL) {
+  if (month(time(layer_data)) %in% 6:9) {
+    if (!is.null(region)) {
+      layer_data <- mask(layer_data, region)
+    }
+    layer_data[values(layer_data) == 0] <- NA
+    mean_sic <- as.numeric(global(layer_data, fun = 'mean', na.rm = TRUE))
+    cell_area_sq_meters <- prod(res(layer_data))
+    valid_ice_cells <- sum(values(layer_data) >= 15, na.rm = TRUE)
+    total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6
+    return(list(date = time(layer_data), mean_sic = mean_sic, ice_extent_km = total_ice_area_sq_km))
+  } else {
+    return(NULL)
+  }
+}
+
+# Process all layers and regions
+results <- list()
+index <- 1
+
+for (i in 1: nlyr(nsidc_winter)) {
+  layer_data <- nsidc_winter[[i]]
+  layer_date <- time(layer_data)
+  print(paste("Processing layer:", i, "Date:", layer_date))  # Diagnostic print
+  
+  total_result <- calculate_layer_stats(layer_data)
+  if (!is.null(total_result)) {
+    total_result$region <- "Total Study Area"
+    results[[index]] <- total_result
+    index <- index + 1
+  }
+  
+  for (region in unique(study_areas$Region)) {
+    region_mask <- study_areas[study_areas$Region == region, ]
+    region_result <- calculate_layer_stats(layer_data, region_mask)
+    if (!is.null(region_result)) {
+      region_result$region <- region
+      results[[index]] <- region_result
+      index <- index + 1
+    }
+  }
+}
+
+# Combine results and save
+result_df <- do.call(rbind, lapply(results, function(x) {
+  if (!is.null(x)) {
+    data.frame(Date = x$date, MeanSIC = x$mean_sic, IceExtent_km = x$ice_extent_km, Region = x$region)
+  } else {
+    NULL
+  }
+}))
+write.csv(result_df, output_path, row.names = FALSE)
+print("Processing complete. Data saved.")
+
+# Summary of processing
+print(paste("Total layers processed:", index - 1))
+print(summary(result_df))
+
+
+
+
+```
+
+**Sea Ice Extent Analysis: Sea Ice Extent Generalized Least Squares**
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(nlme)
+library(wesanderson)
+library(scales)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Calculate monthly averages of ice extent for each region
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup()
+
+# Create a time variable for trend analysis
+monthly_averages <- monthly_averages %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+
+# Define a function to fit a GLS model for a given region and month
+fit_gls_model <- function(region_data) {
+  gls_model <- gls(mean_extent ~ Time, correlation = corAR1(), data = region_data)
+  return(gls_model)
+}
+
+# Apply the model for each unique region and month combination and store the results
+regions <- unique(monthly_averages$Region)
+months <- unique(monthly_averages$Month)
+gls_results <- list()
+
+for (region in regions) {
+  for (month in months) {
+    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
+    if (nrow(region_month_data) > 1) {
+      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
+    }
+  }
+}
+
+# Display summary of the GLS model for each region and month
+for (key in names(gls_results)) {
+  cat("Region and Month:", key, "\n")
+  print(summary(gls_results[[key]]))
+  cat("\n")
+}
+
+# Directory to save the plots
+output_directory <- "D:/Manuscripts_localData/FrostBound_AQ/Results/gls_trends"
+dir.create(output_directory, recursive = TRUE, showWarnings = FALSE)
+
+# Color settings
+sd_color <- "#7AB8BF"  # Light red color (you can adjust to your preferred shade)
+axis_color <- "gray70"  # Light gray color for the axis lines
+
+# Visualize the trend for each region and save the plots
+for (region in regions) {
+  region_data <- monthly_averages %>% filter(Region == region)
+  
+  p <- region_data %>%
+    ggplot(aes(x = Year, y = mean_extent)) +
+    geom_errorbar(aes(ymin = mean_extent - sd_extent, ymax = mean_extent + sd_extent), 
+                  width = 0.2, color = sd_color) +
+    geom_point(color = "black") +
+    geom_smooth(method = "lm", color = "blue", se = FALSE) +
+    facet_wrap(~month2, scales = "fixed", ncol = 3) +
+    xlab(NULL) +
+    ylab(bquote("Ice extent" ~ (km^2 %*% 10^6))) +
+    scale_y_continuous(labels = scales::scientific) +
+    labs(
+      title = sprintf(
+        "%s: Sea ice extent between %d and %d",
+        region,
+        min(region_data$Year),
+        max(region_data$Year)
+      ),
+      subtitle = "The vertical bar at each point shows the standard deviation around the mean. The blue line represents the linear trend.",
+      caption = "Source: NSIDC 25km Sea Ice Index dataset"
+    ) +
+    theme(
+      plot.caption = element_text(size = 8, color = "black"),
+      plot.margin = unit(c(5.5, 10, 5.5, 5.5), "points"),
+      panel.background = element_rect(fill = "white"),
+      strip.background = element_rect(fill = "white"),
+      strip.text = element_text(colour = "black", size = 12, face = "bold"),
+      panel.grid = element_blank(),
+      axis.line = element_line(color = axis_color),
+      legend.position = "none"
+    )
+  
+  # Save the plot
+  ggsave(filename = paste(output_directory, paste("25km_Extent_trend_plot_", region, ".png", sep = ""), sep = "/"), plot = p)
+  
+
+  # Save the plot as EPS
+  ggsave(filename = paste(output_directory, paste("25km_Extent_trend_plot_", region, ".eps", sep = ""), sep = "/"), plot = p, device = "eps")
+}
+
+
+# Extract and print coefficients and p-values for each region and month
+coefficients_gls <- lapply(gls_results, function(model) summary(model)$tTable)
+names(coefficients_gls) <- names(gls_results)
+
+# Print coefficients and p-values
+for (key in names(coefficients_gls)) {
+  cat("Region and Month:", key, "\n")
+  print(coefficients_gls[[key]])
+  cat("\n")
+}
+
+
+```
+
+
+
+**Sea Ice Concentration Analysis: Generalized Least Squares**
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(nlme)
+library(wesanderson)
+library(scales)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Calculate monthly averages of sea ice concentration for each region
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(mean_concentration = mean(MeanSIC, na.rm = TRUE), 
+            sd_concentration = sd(MeanSIC, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup()
+
+# Create a time variable for trend analysis
+monthly_averages <- monthly_averages %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+
+# Define a function to fit a GLS model for a given region and month
+fit_gls_model <- function(region_data) {
+  gls_model <- gls(mean_concentration ~ Time, correlation = corAR1(), data = region_data)
+  return(gls_model)
+}
+
+# Apply the model for each unique region and month combination and store the results
+regions <- unique(monthly_averages$Region)
+months <- unique(monthly_averages$Month)
+gls_results <- list()
+
+for (region in regions) {
+  for (month in months) {
+    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
+    if (nrow(region_month_data) > 1) {
+      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
+    }
+  }
+}
+
+# Display summary of the GLS model for each region and month
+for (key in names(gls_results)) {
+  cat("Region and Month:", key, "\n")
+  print(summary(gls_results[[key]]))
+  cat("\n")
+}
+
+# Directory to save the plots
+output_directory <- "D:/Manuscripts_localData/FrostBound_AQ/Results/gls_trends"
+dir.create(output_directory, recursive = TRUE, showWarnings = FALSE)
+
+# Color settings
+sd_color <- "#7AB8BF"  # Light red color 
+axis_color <- "gray70"  # Light gray color for the axis lines
+
+# Visualize the trend for each region and save the plots
+for (region in regions) {
+  region_data <- monthly_averages %>% filter(Region == region)
+  
+  p <- region_data %>%
+    ggplot(aes(x = Year, y = mean_concentration)) +
+    geom_errorbar(aes(ymin = mean_concentration - sd_concentration, ymax = mean_concentration + sd_concentration), 
+                  width = 0.2, color = sd_color) +
+    geom_point(color = "black") +
+    geom_smooth(method = "lm", color = "blue", se = FALSE) +
+    facet_wrap(~month2, scales = "fixed", ncol = 3) +
+    xlab(NULL) +
+    ylab("Mean Sea Ice Concentration (%)") +
+    labs(
+      title = sprintf(
+        "%s: Sea ice concentration between %d and %d",
+        region,
+        min(region_data$Year),
+        max(region_data$Year)
+      ),
+      subtitle = "The vertical bar at each point shows the standard deviation around the mean. The blue line represents the linear trend.",
+      caption = "Source: NSIDC 25km Sea Ice Index dataset"
+    ) +
+    theme(
+      plot.caption = element_text(size = 8, color = "black"),
+      plot.margin = unit(c(5.5, 10, 5.5, 5.5), "points"),
+      panel.background = element_rect(fill = "white"),
+      strip.background = element_rect(fill = "white"),
+      strip.text = element_text(colour = "black", size = 12, face = "bold"),
+      panel.grid = element_blank(),
+      axis.line = element_line(color = axis_color),
+      legend.position = "none"
+    )
+  
+  # Save the plot
+  ggsave(filename = paste(output_directory, paste("25km_Concentration_trend_plot_", region, ".png", sep = ""), sep = "/"), plot = p)
+  
+  # Save the plot as EPS
+  ggsave(filename = paste(output_directory, paste("25km_Concentration_trend_plot_", region, ".eps", sep = ""), sep = "/"), plot = p, device = "eps")
+}
+
+# Extract and print coefficients and p-values for each region and month
+coefficients_gls <- lapply(gls_results, function(model) summary(model)$tTable)
+names(coefficients_gls) <- names(gls_results)
+
+# Print coefficients and p-values
+for (key in names(coefficients_gls)) {
+  cat("Region and Month:", key, "\n")
+  print(coefficients_gls[[key]])
+  cat("\n")
+}
+
+
+```
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
+
+
+```{r}
+```
+
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
+
+
+
+
+
+```{r}
+```
