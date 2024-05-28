@@ -1,33 +1,32 @@
-library(terra)
-library(doParallel)
+library(terra)        # For raster data manipulation
+library(doParallel)   # For parallel processing
+library(foreach)      # For looping with parallel support
 
-# Define the file path for the raster stack
-r_fp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/12km_AMSR-Unified/stack/AMSR-Unified_SIC_Full-Catalog_Time_Series.nc"
-
-# Load the raster stack outside of the parallel loop for main session setup
-raster_stack <- rast(r_fp)
-
-# Modify the function to work independently in each worker
-calculate_layer_stats <- function(index, file_path) {
-  local_raster <- rast(file_path)
-  layer_data <- local_raster[[index]]
+# Function to calculate mean SIC and sea ice extent for a given raster layer within a file
+calculate_layer_stats <- function(layer_index, file_path) {
+  raster_stack <- rast(file_path)                  # Dynamically load the raster stack from file
+  layer_data <- raster_stack[[layer_index]]        # Extract the specific layer
+  layer_date <- time(layer_data)                   # Extract date from layer metadata
   
-  # Cast values of 0 to NA
+  # Replace 0 with NA
   values(layer_data)[values(layer_data) == 0] <- NA
   
-  # Check if all values are NA
-  mean_value <- NA
-  ice_extent <- NA
-  if (any(!is.na(values(layer_data)))) {
-    mean_value <- mean(values(layer_data), na.rm = TRUE)
-    binary_ice_values <- ifelse(values(layer_data) >= 0.15, 1, 0)
-    binary_ice_raster <- layer_data
-    values(binary_ice_raster) <- binary_ice_values
-    ice_extent <- sum(values(binary_ice_raster) * res(binary_ice_raster)[1] * res(binary_ice_raster)[2], na.rm = TRUE)
-  }
+  # Calculate mean SIC excluding NAs and determine ice extent
+  mean_sic <- as.numeric(terra::global(layer_data, fun = 'mean', na.rm = TRUE))
+  cell_area_sq_meters <- prod(res(layer_data))    # Calculate the area of one cell in square meters
+  valid_ice_cells <- sum(values(layer_data) >= 15, na.rm = TRUE)  # Count cells with valid ice concentration
   
-  return(list(mean = mean_value, ice_extent = ice_extent))
+  # Convert total ice area to square kilometers
+  total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6
+  
+  rm(raster_stack, layer_data)   # Clear memory
+  gc()                           # Run garbage collection
+  
+  return(list(mean_sic = mean_sic, ice_extent_km = total_ice_area_sq_km, date = layer_date))
 }
+
+# Directory and file path setup
+r_fp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/12km_AMSR-Unified/stack/AMSR-Unified_SIC_Full-Catalog_Time_Series.nc"
 
 # Set up parallel computing
 cl <- makeCluster(detectCores() - 1)
@@ -36,30 +35,30 @@ registerDoParallel(cl)
 # Send necessary function and file path to all workers
 clusterExport(cl, varlist = c("calculate_layer_stats", "r_fp"))
 
-# Extract dates for each layer
-dates <- as.Date(time(raster_stack))
-
-# Perform calculations in parallel
-results <- foreach(i = 1:nlyr(raster_stack), .packages = 'terra') %dopar% {
-  calculate_layer_stats(i, r_fp)
+# Perform calculations in parallel with error handling
+results <- foreach(i = 1:nlyr(rast(r_fp)), .packages = 'terra', .errorhandling = "pass") %dopar% {
+  tryCatch({
+    calculate_layer_stats(i, r_fp)
+  }, error = function(e) {
+    return(list(error = TRUE, message = e$message))
+  })
 }
 
 # Stop the cluster after the task is done to free up resources
 stopCluster(cl)
 
-# Create a dataframe with results and additional data
-result_df <- data.frame(
-  Index = 1:nlyr(raster_stack),
-  Date = dates,
-  MeanSIC = sapply(results, `[[`, "mean"),
-  IceExtent = sapply(results, `[[`, "ice_extent")
-)
+# Handling results and constructing the final dataframe
+result_df <- do.call(rbind, lapply(results, function(x) {
+  if (!is.null(x$error)) {
+    return(data.frame(Date = NA, MeanSIC = NA, IceExtent_km = NA, error = x$message))
+  } else {
+    return(data.frame(Date = x$date, MeanSIC = x$mean_sic, IceExtent_km = x$ice_extent_km, error = NA))
+  }
+}))
 
-# Save results to CSV
-write.csv(result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/12km_AMSR-Unified/stack/12km_SIC.csv", row.names = FALSE)
-
-# Save results to RDS
-saveRDS(result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/12km_AMSR-Unified/stack/12km_SIC.rds")
+# Save results to CSV and RDS for further use
+write.csv(result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/12km_AMSR-Unified/stack/12km_AMSR-Unified_Metrics.csv", row.names = FALSE)
+saveRDS(result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/12km_AMSR-Unified/stack/12km_AMSR-Unified_Metrics.rds")
 
 # Display some of the results for verification
 print(head(result_df))
