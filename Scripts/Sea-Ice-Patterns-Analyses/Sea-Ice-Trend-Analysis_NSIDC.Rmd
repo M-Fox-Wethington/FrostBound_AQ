@@ -10,13 +10,18 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
+```{r}
+library(terra)
 
-
+```
 
 ## **Dataset Overview**
 
 ```{r Data Overview}
 
+nsidc_winter <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc"
+
+nsidc_winter <- rast(nsidc_winter)
 
 # Print the object to see its structure
 print(nsidc_winter)
@@ -55,6 +60,12 @@ if (inherits(nsidc_winter, "SpatRaster")) {
   print("The object is not a SpatRaster. Further exploration is needed.")
 }
 
+
+summary(nsidc_winter[[1]])
+
+plot(nsidc_winter[[1]])
+
+rm(nsidc_winter)
 ```
 
 
@@ -63,88 +74,6 @@ if (inherits(nsidc_winter, "SpatRaster")) {
 **Calculate Regional Ice Extent Metrics (Parallel)**
 
 ```{r Calculate Regional Ice Extent Metrics}
-# library(terra)        # For raster data manipulation
-# library(doParallel)   # For parallel processing
-# library(foreach)      # For looping with parallel support
-# 
-# # Function to calculate mean SIC and sea ice extent for a given raster layer within a file
-# calculate_layer_stats <- function(layer_index, file_path) {
-#   raster_stack <- rast(file_path)                  # Load the raster stack from file
-#   layer_data <- raster_stack[[layer_index]]        # Extract the specific layer
-#   
-#   layer_date <- time(layer_data)                   # Extract date from layer metadata
-#   
-#   mean_sic <- as.numeric(terra::global(layer_data, fun = 'mean', na.rm = TRUE))  # Calculate mean SIC excluding NAs
-#   
-#   cell_area_sq_meters <- prod(res(layer_data))    # Calculate the area of one cell in square meters
-#   
-# 
-#     
-#   total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6  # Convert total ice area to square kilometers
-#   
-#   rm(raster_stack, layer_data)   # Clear memory
-#   gc()                           # Run garbage collection
-#   
-#   # Extract region name from the file path
-#   region_name <- tools::file_path_sans_ext(basename(file_path))
-#   region_name <- sub("NSIDC_25km_", "", region_name)  # Adjust based on actual pattern in filenames
-#   
-#   return(list(mean_sic = mean_sic, ice_extent_km = total_ice_area_sq_km, date = layer_date, region = region_name))
-# }
-# 
-# # Directory with chunk files for each region
-# chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/substack"
-# chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)  # List all .nc files for each region
-# 
-# 
-# 
-# all_results <- list()  # Initialize list to store results from all chunks
-# 
-# for (r_fp in chunk_files) {
-#   numCores <- detectCores() - 1
-#   cl <- makeCluster(numCores)gma
-#   registerDoParallel(cl)
-#   
-#   clusterExport(cl, varlist = c("calculate_layer_stats", "r_fp"))
-#   
-#   results <- foreach(i = 1:nlyr(rast(r_fp)), .packages = 'terra', .errorhandling = "pass") %dopar% {
-#     tryCatch({
-#       calculate_layer_stats(i, r_fp)
-#     }, error = function(e) {
-#       return(list(error = TRUE, message = e$message))
-#     })
-#   }
-#   
-#   stopCluster(cl)
-#   
-#   # Append chunk results to overall results, add file path to results for region tracking
-#   all_results <- c(all_results, lapply(results, function(x) c(x, file = r_fp)))
-# }
-# 
-# # Convert list of all results into a dataframe, handling possible errors
-# final_result_df <- do.call(rbind, lapply(all_results, function(x) {
-#   if (!is.null(x$error)) {
-#     return(data.frame(Date = NA, MeanSIC = NA, IceExtent_km = NA, Region = NA, error = x$message))
-#   } else {
-#     return(data.frame(Date = x$date, MeanSIC = x$mean_sic, IceExtent_km = x$ice_extent_km, Region = x$region, error = NA))
-#   }
-# }))
-# 
-# 
-# 
-# # Add year, month, and day columns
-# final_result_df <- final_result_df %>%
-#   mutate(Year = year(Date), Month = month(Date), Day = day(Date))
-# 
-# # Filter for Full_Study_Area and June, July, August, and September
-# final_result_df <- nsidc_metrics %>%
-#   filter(Month %in% c(6, 7, 8, 9))
-# 
-# 
-# # Save combined results to CSV and RDS for further use
-# write.csv(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.csv", row.names = FALSE)
-# saveRDS(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
-
 
 
 library(terra)        # For raster data manipulation
@@ -163,7 +92,8 @@ calculate_layer_stats <- function(layer_index, file_path) {
   # Handle sea ice concentration: treat cells < 15 as 0
   layer_data[layer_data < 15] <- 0
   
-  mean_sic <- as.numeric(terra::global(layer_data, fun = 'mean', na.rm = TRUE))  # Calculate mean SIC excluding NAs
+  # Calculate mean SIC excluding NAs
+  mean_sic <- as.numeric(terra::global(layer_data, fun = 'mean', na.rm = TRUE))  
   
   # Handle sea ice extent: count cells >= 15
   valid_ice_cells <- sum(values(layer_data) >= 15, na.rm = TRUE)
@@ -181,8 +111,10 @@ calculate_layer_stats <- function(layer_index, file_path) {
 }
 
 # Directory with chunk files for each region
-chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/substack"
+chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack"
+
 chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)  # List all .nc files for each region
+
 
 all_results <- list()  # Initialize list to store results from all chunks
 
@@ -218,15 +150,15 @@ final_result_df <- do.call(rbind, lapply(all_results, function(x) {
 
 # Add year, month, and day columns
 final_result_df <- final_result_df %>%
-  mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+  dplyr::mutate(Year = year(Date), Month = month(Date), Day = day(Date))
 
 # Filter for Full_Study_Area and June, July, August, and September
 final_result_df <- final_result_df %>%
   filter(Month %in% c(6, 7, 8, 9))
 
 # Save combined results to CSV and RDS for further use
-write.csv(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.csv", row.names = FALSE)
-saveRDS(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+write.csv(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.csv", row.names = FALSE)
+saveRDS(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
 
 
 
