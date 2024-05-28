@@ -18,7 +18,12 @@ Source Data Concentration Surface Classification Values:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-# Reproject the downloaded tifs to EPSG:3976
+**Reproject the downloaded tifs to EPSG:3976**
+
+    1. Generate a list of all the downloaded NSDIC 25.5 km tifs
+    2. Loop through list of raster and ensure that the projection is EPSG: 3976
+    3. Export each raster 
+
 ```{r include=FALSE}
 # Load required libraries
 library(terra)   # For spatial data analysis and raster manipulation
@@ -55,8 +60,9 @@ for (file in raster_files) {
 ```
 
 
+**Pull (Clip) raster masks of the study area**
 
-Pull (Clip) raster masks of the study area 
+
 ```{r}
 # Load required libraries
 library(terra)   # For spatial data analysis and raster manipulation
@@ -106,8 +112,8 @@ for (file in raster_files) {
 ```
 
 
+**Generate a netcdf Raster Stack for the dataset**
 
-#Convert to Raster Stack
 
 ```{r} 
 
@@ -150,8 +156,6 @@ values_to_exclude <- c(2510, 2530, 2540, 2550)  # Other non-ice values
 
 raster_stack[raster_stack %in% values_to_exclude] <- NA
 
-# Ignore values less than 150 (1-15% concentration)
-# raster_stack[raster_stack < 150] <- NA
 
 # Scale the values from 0-1000 to 0-100% for percentage representation
 raster_stack <- raster_stack / 10
@@ -190,7 +194,12 @@ head(time(loaded_stack))
 ```
 
 
-***Create a Substack for Antarctic Winter Months**
+**Create a Substack for Antarctic Winter Months**
+
+    1. Subset the data for June-September
+    2. Generate and export a new winter raster stack 
+    
+    
 ```{r Generate Winter Substack}
 library(terra)    # For raster data manipulation
 library(lubridate)  # For date-time operations
@@ -223,7 +232,11 @@ writeCDF(nsidc_winter, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Se
 nsidc_winter <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/NSIDC_25km_Winter_Months.nc")
 
 ```
+
 **Create Subregion Stacks**
+
+    1. Loop through the individual study area subregions (shapefile)
+    2. Generate and export new raster stacks for each respective subregion
 
 
 ```{r}
