@@ -501,11 +501,11 @@ for (key in names(coefficients_gls)) {
 library(dplyr)
 library(lubridate)
 library(ggplot2)
-library(nlme)
 library(httr)
 library(tidyr)
 library(broom)
 library(gridExtra)
+library(RColorBrewer)
 
 # Load your dataset
 nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
@@ -534,23 +534,21 @@ soi_text <- content(soi_raw, "text")
 
 # Preprocess the SOI data
 soi_lines <- strsplit(soi_text, "\n")[[1]]
-soi_lines <- soi_lines[-c(1:2)]  # Remove header lines
 
-# Extract and clean SOI data
-soi_data <- read.table(text = soi_lines, fill = TRUE, stringsAsFactors = FALSE)
-soi_data <- soi_data[complete.cases(soi_data), ]  # Remove rows with missing data
+# Identify the start of the standardized SOI data section
+standardized_soi_start <- grep("STANDARDIZED    DATA", soi_lines)
 
-# Remove rows with non-numeric years
-soi_data <- soi_data[grepl("^\\d{4}$", soi_data$V1), ]
+# Extract standardized SOI data lines
+soi_standardized_lines <- soi_lines[(standardized_soi_start + 3):length(soi_lines)]
+soi_standardized_lines <- soi_standardized_lines[!grepl("-999.9", soi_standardized_lines)] # remove lines with invalid data
 
-# Extract year and monthly data
-soi_years <- as.numeric(soi_data$V1)
-soi_values <- soi_data[, -1]
-colnames(soi_values) <- month.abb
-soi_data_clean <- data.frame(Year = soi_years, soi_values)
+# Convert standardized SOI data to dataframe
+soi_data <- read.table(text = soi_standardized_lines, fill = TRUE, stringsAsFactors = FALSE)
+colnames(soi_data) <- c("Year", month.abb)
+soi_data <- soi_data %>% mutate(Year = as.integer(Year))
 
 # Convert to long format
-soi_data_long <- soi_data_clean %>%
+soi_data_long <- soi_data %>%
   pivot_longer(-Year, names_to = "Month", values_to = "SOI") %>%
   mutate(Month = match(Month, month.abb), 
          Year = as.integer(Year),
@@ -573,70 +571,43 @@ correlation_results <- merged_data %>%
 # Print the correlation results
 print(correlation_results)
 
-# Visualize the correlation results
-ggplot(correlation_results, aes(x = factor(Month, levels = 1:12), y = correlation, fill = Region)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  geom_text(aes(label = round(correlation, 2)), vjust = -0.5, position = position_dodge(0.9)) +
+
+
+
+
+# Visualize the correlation results using RColorBrewer color palette
+ggplot(correlation_results, aes(x = factor(Month, levels = 6:9), y = correlation, fill = Region)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9)) +
+  geom_text(aes(label = round(correlation, 2)), vjust = -1.5, position = position_dodge(0.9)) +
+  scale_fill_brewer(palette = "Set3") +  # You can choose other palettes like "Paired", "Dark2", etc.
   labs(title = "Correlation between SOI and Sea Ice Extent by Region and Month",
        x = "Month", y = "Correlation") +
-  theme_minimal()
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "bottom"
+  )
 
-# Function to fit a GLS model for a given region and month
-fit_gls_model <- function(region_data) {
-  gls_model <- gls(mean_extent ~ Time, correlation = corAR1(), data = region_data)
-  return(gls_model)
-}
 
-# Apply the model for each unique region and month combination and store the results
-regions <- unique(monthly_averages$Region)
-months <- unique(monthly_averages$Month)
-gls_results <- list()
 
-for (region in regions) {
-  for (month in months) {
-    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
-    if (nrow(region_month_data) > 1) {
-      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
-    }
-  }
-}
-
-# Display summary of the GLS model for each region and month
-for (key in names(gls_results)) {
-  cat("Region and Month:", key, "\n")
-  print(summary(gls_results[[key]]))
-  cat("\n")
-}
-
-# Extract and print coefficients and p-values for each region and month
-coefficients_gls <- lapply(gls_results, function(model) summary(model)$tTable)
-names(coefficients_gls) <- names(gls_results)
-
-# Print coefficients and p-values
-for (key in names(coefficients_gls)) {
-  cat("Region and Month:", key, "\n")
-  print(coefficients_gls[[key]])
-  cat("\n")
-}
-
-# Function to plot SOI vs. sea ice extent
-plot_soi_vs_extent <- function(data, region, month) {
-  ggplot(data %>% filter(Region == region, Month == month), aes(x = SOI, y = mean_extent)) +
-    geom_point() +
-    geom_smooth(method = "lm", se = FALSE, color = "blue") +
-    labs(title = paste("SOI vs Sea Ice Extent:", region, "-", month.name[month]),
-         x = "SOI",
-         y = "Mean Sea Ice Extent (km^2)") +
-    theme_minimal()
-}
-
-# Visualize the relationship between SOI and sea ice extent for each region and month
-for (region in unique(merged_data$Region)) {
-  for (month in unique(merged_data$Month)) {
-    p <- plot_soi_vs_extent(merged_data, region, month)
-    print(p)
-  }
-}
+# # Function to plot SOI vs. sea ice extent
+# plot_soi_vs_extent <- function(data, region, month) {
+#   ggplot(data %>% filter(Region == region, Month == month), aes(x = SOI, y = mean_extent)) +
+#     geom_point() +
+#     geom_smooth(method = "lm", se = FALSE, color = "blue") +
+#     labs(title = paste("SOI vs Sea Ice Extent:", region, "-", month.name[month]),
+#          x = "SOI",
+#          y = "Mean Sea Ice Extent (km^2)") +
+#     theme_minimal()
+# }
+# 
+# # Visualize the relationship between SOI and sea ice extent for each region and month
+# for (region in unique(merged_data$Region)) {
+#   for (month in unique(merged_data$Month)) {
+#     p <- plot_soi_vs_extent(merged_data, region, month)
+#     print(p)
+#   }
+# }
 
 # Linear regression analysis to quantify the relationship between SOI and sea ice extent
 regression_results <- merged_data %>%
