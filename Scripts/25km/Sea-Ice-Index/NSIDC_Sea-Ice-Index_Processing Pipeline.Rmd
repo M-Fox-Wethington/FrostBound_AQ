@@ -78,7 +78,9 @@ if (!dir.exists(output_raster_dir)) {
 }
 
 # Load the study area shapefile
-study_area_shp <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/Frostbound_AQ_Subregions_EPSG_3976.shp"
+study_area_shp <- vect("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp")
+
+
 study_area <- vect(study_area_shp)
 
 # List all raster files in the input directory and sort them by date
@@ -246,7 +248,8 @@ library(terra)
 # Load the raster stack
 nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/NSIDC_25km_Winter_Months.nc")
 # Load the study area shapefile
-study_areas <- vect("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/Frostbound_AQ_Subregions_EPSG_3976.shp")
+study_areas <- vect("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp")
+
 
 # Define the output directory
 output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/substack/"

@@ -365,12 +365,6 @@ for (key in names(coefficients_gls)) {
 
 
 
-
-
-
-
-
-
 **Concentration: Sea Ice Analysis - Generalized Least Squares**
 
 ```{r}
@@ -494,7 +488,7 @@ for (key in names(coefficients_gls)) {
 ```
 
 
-**Souther Oscillation Index Analysis**
+**Southern Oscillation Index Analysis**
 
 ```{r}
 # Load necessary libraries
@@ -574,7 +568,6 @@ print(correlation_results)
 
 
 
-
 # Visualize the correlation results using RColorBrewer color palette
 ggplot(correlation_results, aes(x = factor(Month, levels = 6:9), y = correlation, fill = Region)) +
   geom_bar(stat = "identity", position = position_dodge(0.9)) +
@@ -590,24 +583,6 @@ ggplot(correlation_results, aes(x = factor(Month, levels = 6:9), y = correlation
 
 
 
-# # Function to plot SOI vs. sea ice extent
-# plot_soi_vs_extent <- function(data, region, month) {
-#   ggplot(data %>% filter(Region == region, Month == month), aes(x = SOI, y = mean_extent)) +
-#     geom_point() +
-#     geom_smooth(method = "lm", se = FALSE, color = "blue") +
-#     labs(title = paste("SOI vs Sea Ice Extent:", region, "-", month.name[month]),
-#          x = "SOI",
-#          y = "Mean Sea Ice Extent (km^2)") +
-#     theme_minimal()
-# }
-# 
-# # Visualize the relationship between SOI and sea ice extent for each region and month
-# for (region in unique(merged_data$Region)) {
-#   for (month in unique(merged_data$Month)) {
-#     p <- plot_soi_vs_extent(merged_data, region, month)
-#     print(p)
-#   }
-# }
 
 # Linear regression analysis to quantify the relationship between SOI and sea ice extent
 regression_results <- merged_data %>%
@@ -650,21 +625,21 @@ plots <- lapply(unique_regions, function(region) {
 # Display the plots
 do.call(grid.arrange, c(plots, ncol = 2))
 
-# Create a combined plot showing the SOI coefficients for all regions and months
-ggplot(soi_coefficients, aes(x = factor(Month), y = estimate, color = Region)) +
-  geom_point(size = 3) +
-  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-  labs(
-    title = "Effect of SOI on Sea Ice Extent Across Regions and Months",
-    x = "Month",
-    y = "SOI Coefficient Estimate",
-    color = "Region"
-  ) +
-  theme_minimal() +
-  theme(
-    plot.title = element_text(hjust = 0.5)
-  )
+# # Create a combined plot showing the SOI coefficients for all regions and months
+# ggplot(soi_coefficients, aes(x = factor(Month), y = estimate, color = Region)) +
+#   geom_point(size = 3) +
+#   geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+#   geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+#   labs(
+#     title = "Effect of SOI on Sea Ice Extent Across Regions and Months",
+#     x = "Month",
+#     y = "SOI Coefficient Estimate",
+#     color = "Region"
+#   ) +
+#   theme_minimal() +
+#   theme(
+#     plot.title = element_text(hjust = 0.5)
+  # )
 
 # Create individual plots for each region and arrange them using facet_wrap
 ggplot(soi_coefficients, aes(x = factor(Month), y = estimate)) +
@@ -682,11 +657,133 @@ ggplot(soi_coefficients, aes(x = factor(Month), y = estimate)) +
     plot.title = element_text(hjust = 0.5)
   )
 
+
 ```
 
 
 
-###DEPRECATED
+**Gentoo Penguin Abundance Analysis**
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+# Load your Gentoo penguin dataset
+gentoo_file_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/GentooCounts_48_1.csv"
+gentoo_data <- read.csv(gentoo_file_path)
+
+# Filter to include only nests and years starting from 1995
+gentoo_data <- gentoo_data %>%
+  filter(count_type == "nests" & season_starting >= 1995)
+
+# Check the structure of the filtered data
+str(gentoo_data)
+
+# Aggregate counts by averaging for each site per season, then standardize by the number of sites visited
+annual_abundance <- gentoo_data %>%
+  group_by(season_starting, site_name) %>%
+  summarise(avg_abundance = mean(penguin_count, na.rm = TRUE), .groups = 'drop') %>%
+  group_by(season_starting) %>%
+  summarise(total_abundance = sum(avg_abundance, na.rm = TRUE), 
+            num_sites = n_distinct(site_name), .groups = 'drop') %>%
+  mutate(standardized_abundance = total_abundance / num_sites)
+
+# Print annual_abundance for verification
+print("Annual abundance data:")
+print(head(annual_abundance))
+
+# Load your sea ice concentration dataset
+sea_ice_file_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds"
+nsidc_metrics <- readRDS(sea_ice_file_path)
+
+# Add Year, Month, and Day columns to sea ice data
+sea_ice_data <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date))
+
+# Check the structure of the sea_ice_data
+str(sea_ice_data)
+
+# Calculate the average sea ice concentration for each month (June, July, August, September) for each year
+monthly_sea_ice <- sea_ice_data %>%
+  filter(Month %in% c(6, 7, 8, 9)) %>%
+  group_by(Year, Month) %>%
+  summarise(average_concentration = mean(MeanSIC, na.rm = TRUE), .groups = 'drop')
+
+# Print monthly_sea_ice for verification
+print("Monthly sea ice data:")
+print(head(monthly_sea_ice))
+
+# Function to calculate sub-seasonal correlations for different lag periods
+calculate_subseasonal_correlation <- function(month, lag) {
+  monthly_data <- monthly_sea_ice %>%
+    filter(Month == month) %>%
+    mutate(Year_lagged = Year + lag) %>%
+    select(Year_lagged, average_concentration)
+  
+  # Inspect the monthly data for debugging
+  print(paste("Monthly data for month:", month, "with lag:", lag))
+  print(head(monthly_data))
+  
+  correlation_results_monthly <- annual_abundance %>%
+    inner_join(monthly_data, by = c("season_starting" = "Year_lagged"))
+  
+  # Inspect the join results for debugging
+  print(paste("Join results for month:", month, "with lag:", lag))
+  print(head(correlation_results_monthly))
+  
+  if (nrow(correlation_results_monthly) > 0) {
+    correlation_value_monthly <- cor(correlation_results_monthly$standardized_abundance, correlation_results_monthly$average_concentration, use = "complete.obs")
+  } else {
+    correlation_value_monthly <- NA
+  }
+  
+  return(correlation_value_monthly)
+}
+
+# Calculate correlations for each month (June, July, August, September) and for each lag (1 to 6 years)
+months <- c(6, 7, 8, 9)
+month_names <- c("June", "July", "August", "September")
+lags <- 1:6
+subseasonal_correlations <- expand.grid(months, lags) %>%
+  apply(1, function(x) calculate_subseasonal_correlation(x[1], x[2]))
+
+# Convert the correlation results to a data frame
+subseasonal_correlation_df <- expand.grid(Month = factor(month_names, levels = month_names), Lag = lags)
+subseasonal_correlation_df$Correlation <- subseasonal_correlations
+
+# Print sub-seasonal correlation results
+for (i in seq_along(subseasonal_correlations)) {
+  cat("Correlation between Gentoo penguin abundance and average sea ice concentration in", 
+      subseasonal_correlation_df$Month[i], "with", subseasonal_correlation_df$Lag[i], "year lag (starting from 1995):", 
+      subseasonal_correlation_df$Correlation[i], "\n")
+}
+
+# Plot sub-seasonal correlations
+plot_subseasonal_correlations <- ggplot(subseasonal_correlation_df, aes(x = Lag, y = Correlation, color = Month)) +
+  geom_point() +
+  geom_line() +
+  labs(
+    title = "Correlation between Gentoo Penguin Abundance and Lagged Sea Ice Concentration",
+    x = "Lag Period (Years)",
+    y = "Correlation Coefficient"
+  ) +
+  theme_minimal()
+
+# Save the sub-seasonal correlation plot
+ggsave("D:/Manuscripts_localData/FrostBound_AQ/Results/subseasonal_correlations_plot.png", plot_subseasonal_correlations)
+
+# Display the sub-seasonal correlation plot
+print(plot_subseasonal_correlations)
+
+
+
+```
+
+
+
+
 
 
 
