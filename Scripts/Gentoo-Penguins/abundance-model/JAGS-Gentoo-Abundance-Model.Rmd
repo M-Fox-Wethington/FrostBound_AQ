@@ -1,0 +1,247 @@
+---
+title: "Gentoo Model Parameter Abundance Model"
+author: "Michael J. Wethington"
+date: "2024-06-04"
+output: html_document
+---
+
+
+zi = latent nest abundance (mean-adjusted)
+
+lz = logged abundance (re-expression of above):  lzi,t=log(zi,t). for the ith site in the tth year,
+
+ri = intrinsic growth rate
+
+lp = predicted population growth rate multiplier
+la = actual population growth rate multiplier 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+library(tidyverse)
+library(coda)
+library(mapppdr)
+library(tidyverse)
+library(patchwork)
+library(leaflet)
+library(CCAMLRGIS)
+library(rjags)
+library(MCMCvis)
+library(parallel)
+library(stringi)
+library(pander)
+library(testthat)
+library(stringi)
+
+# required_packages <- c("rlang", "fastmap", "digest", "fs", "cachem", "vctrs", "stringi", "glue", "cli", "utf8", "fansi", "dplyr")
+# 
+# for(pkg in required_packages){
+#   if(!require(pkg, character.only = TRUE)){
+#     install.packages(pkg)
+#   }
+# }
+
+```
+
+
+
+
+**Construct Presence-Absence Assumptions csv for the JAGS model**
+
+```{r}
+
+# Parameters
+min_season <- 1970
+max_season <- 2023
+species <- "GEPE"
+
+# Load penguin observations data
+penguin_obs <- mapppdr::penguin_obs
+
+# Process the penguin observations dataset to match the required format
+penguin_obs_processed <- penguin_obs %>%
+  filter(species_id == species) %>%
+  mutate(
+    presence = ifelse(!is.na(count), 1, 0),
+    known_w = 1) %>%
+  select(site_id, season, presence, known_w, count, accuracy, type)
+
+# Generate the presence/absence assumptions dataset
+presence_absence_assumptions <- expand.grid(
+  site_id = unique(penguin_obs$site_id),
+  season = min_season:max_season
+) %>%
+  left_join(penguin_obs_processed, by = c("site_id", "season")) %>%
+  mutate(
+    presence = ifelse(is.na(presence), 0, presence),
+    known_w = ifelse(is.na(known_w), 0, known_w),
+    count = ifelse(is.na(count), 0, count)) %>%
+  group_by(site_id, season) %>%
+  arrange(desc(type), desc(accuracy), .by_group = TRUE) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(site_id, season, presence, known_w, count, accuracy)
+
+# Visualize presence/absence data
+plot_data <- presence_absence_assumptions %>%
+  mutate(
+    presence = as.factor(presence),
+    known_w = as.factor(known_w)
+  )
+
+# Plot with facetting
+ggplot(plot_data, aes(x = factor(season), y = factor(site_id))) +
+  geom_tile(aes(fill = presence, color = known_w), size = 1.5) +
+  scale_fill_manual(values = c("0" = "gray90", "1" = "blue")) +
+  scale_color_manual(values = c("0" = NA, "1" = "black")) +
+  labs(
+    x = "Season",
+    y = "Site ID",
+    fill = "Presence",
+    color = "Known"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
+    axis.text.y = element_text(size = 5),
+    panel.grid = element_blank()
+  ) +
+  facet_wrap(~ site_id, scales = "free_y", ncol = 5) +
+  coord_fixed(ratio = 1)  # Adjust aspect ratio to make tiles more square
+
+# ggsave("gentoo_presence_absence_plot_facetted.png", width = 20, height = 15)
+
+
+
+```
+
+
+
+
+
+
+**Load the Jags MCMC Output File**
+
+```{r}
+# Load the RDA file
+load("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/model_data_rinits_output.rda")
+
+# Ensure the data is loaded
+print(ls())
+
+# Check the structure of the dataset
+str(model_data_rinits_output)
+
+```
+
+
+**Extract the Gentoo Abundance Estimates (lz)**
+
+lza = logged latent seasonal abudance
+
+The logged latent seasonal nest abundance for the ith site in the tth year, while allowing for site extirpation and colonization events, as lzai,t=lzi,t⋅wi,t. Please see #3 in Section 2.5 for the details regarding wi,t.
+
+
+population growth rate multiplier
+
+```{r}
+#cast the mcmc model into a matrix
+model_samples <- as.matrix(model_data_rinits_output)
+
+
+# Filter columns that are logged latent abundance (lz) parameters
+lz_columns <- grep("^lz\\[", colnames(model_samples)) #logged abundance
+lz_samples <- lz_samples[, lz_columns]
+
+#Convert log-abundances to actual abundances
+abundance_samples <- exp(lz_samples)
+
+# Summarize the actual abundances
+abundance_summary <- apply(abundance_samples, 2, function(x) {
+  c(mean = mean(x), median = median(x), 
+    lower_95 = quantile(x, 0.025), upper_95 = quantile(x, 0.975))
+})
+
+# Convert to a readable data frame (use t to transpose)
+abundance_summary_df <- as.data.frame(t(abundance_summary))
+
+
+```
+
+**Extract site and season info from the indices**
+```{r}
+# Updated extract_indices function
+extract_indices <- function(colname) {
+  indices <- gsub("[^0-9,]", "", colname)
+  as.integer(unlist(strsplit(indices, ",")))
+}
+
+indices <- lapply(colnames(abundance_samples), extract_indices)
+sites <- sapply(indices, `[`, 1)
+seasons <- sapply(indices, `[`, 2)
+
+abundance_summary_df$site <- sites
+abundance_summary_df$season <- seasons
+head(abundance_summary_df)
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
+```{r}
+
+
+```
+
+
