@@ -141,6 +141,14 @@ final_data <- final_data %>%
   mutate(growth_rate = mean_abundance / lag(mean_abundance)) %>%
   ungroup()
 
+# Adjust the season column in the final data
+final_data <- final_data %>%
+  mutate(year = 1970 + season - 1)
+
+# Display the adjusted final_data
+print(head(final_data))
+
+write.csv(final_data, "D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
 # Print the head of the final data with growth rates
 print(head(final_data))
 
@@ -189,7 +197,7 @@ ggplot(site_data, aes(x = year, y = mean_abundance)) +
        subtitle = paste0("mean population growth multiplier = ", round(mean_growth$mean_growth_multiplier, 3), 
                          " (", round(mean_growth$lower_ci, 2), " - ", round(mean_growth$upper_ci, 2), ")"),
        x = "Year",
-       y = "logged abundance",
+       y = "Abundance",
        color = "Type") +
   theme_minimal() +
   theme(plot.title = element_text(hjust = 0.5),
@@ -197,9 +205,76 @@ ggplot(site_data, aes(x = year, y = mean_abundance)) +
 
 
 ```
-
+**Gentoo - SIC Trend Analysis**
 
 ```{r}
+library(tidyverse)
+library(terra)
+library(lubridate)
+library(nlme)
+
+# Load penguin census data and final modeled abundance data
+penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
+penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
+
+# Load the sea ice concentration data
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+
+# Adjust the season column in the penguin abundance data
+penguin_abundance_data <- penguin_abundance_data %>%
+  mutate(year = 1970 + season - 1)
+
+# Filter penguin data to keep only consecutively censused sites and clean duplicates
+consecutively_censused <- penguin_data %>%
+  arrange(site_id, season) %>%
+  group_by(site_id) %>%
+  mutate(next_season = lead(season),
+         next_presence = lead(presence)) %>%
+  filter(presence == 1 & next_presence == 1 & season != next_season) %>%
+  ungroup() %>%
+  select(site_id, season, presence, known_w, next_season)
+
+# Merge with penguin abundance data
+penguin_abundance_filtered <- penguin_abundance_data %>%
+  left_join(consecutively_censused, by = c("site_id" = "site_id", "year" = "season")) %>%
+  filter(!is.na(next_season))
+
+# Function to calculate mean sea ice concentration for the overwinter period
+calculate_overwinter_sea_ice <- function(years, nsidc_metrics) {
+  # Define the winter months (e.g., June to August)
+  winter_months <- c(6, 7, 8)
+  # Filter sea ice data for the winter months of the given years
+  winter_data <- nsidc_metrics %>%
+    filter(Year %in% years & Month %in% winter_months)
+  # Calculate the mean sea ice concentration over the given years
+  mean_sea_ice <- mean(winter_data$MeanSIC, na.rm = TRUE)
+  return(mean_sea_ice)
+}
+
+# Add previous season's sea ice concentration to the penguin abundance data
+penguin_abundance_filtered <- penguin_abundance_filtered %>%
+  rowwise() %>%
+  mutate(overwinter_sea_ice_1yr = calculate_overwinter_sea_ice(year - 1, nsidc_metrics),
+         overwinter_sea_ice_2yr = calculate_overwinter_sea_ice(c(year - 1, year - 2), nsidc_metrics),
+         overwinter_sea_ice_3yr = calculate_overwinter_sea_ice(c(year - 1, year - 2, year - 3), nsidc_metrics)) %>%
+  ungroup() %>%
+  filter(!is.na(overwinter_sea_ice_1yr) & !is.na(overwinter_sea_ice_2yr) & !is.na(overwinter_sea_ice_3yr))
+
+# Fit GLS models for the relationship between sea ice concentration and growth rates across all sites for each time lag
+
+# Previous 1 year
+gls_model_1yr <- gls(growth_rate ~ overwinter_sea_ice_1yr, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
+
+# Previous 2 years
+gls_model_2yr <- gls(growth_rate ~ overwinter_sea_ice_2yr, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
+
+# Previous 3 years
+gls_model_3yr <- gls(growth_rate ~ overwinter_sea_ice_3yr, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
+
+# Summarize the results
+summary(gls_model_1yr)
+summary(gls_model_2yr)
+summary(gls_model_3yr)
 
 
 ```
