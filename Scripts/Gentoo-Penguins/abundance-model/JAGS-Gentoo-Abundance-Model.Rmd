@@ -19,320 +19,8 @@ la = actual population growth rate multiplier
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
 
-library(tidyverse)
-library(coda)
-library(mapppdr)
-library(tidyverse)
-library(patchwork)
-library(leaflet)
-library(CCAMLRGIS)
-library(rjags)
-library(MCMCvis)
-library(parallel)
-library(stringi)
-library(pander)
-library(testthat)
-library(stringi)
 
-# required_packages <- c("rlang", "fastmap", "digest", "fs", "cachem", "vctrs", "stringi", "glue", "cli", "utf8", "fansi", "dplyr")
-# 
-# for(pkg in required_packages){
-#   if(!require(pkg, character.only = TRUE)){
-#     install.packages(pkg)
-#   }
-# }
-
-```
-
-
-
-
-**Construct Presence-Absence Assumptions csv for the JAGS model**
-
-```{r}
-
-# Parameters
-min_season <- 1970
-max_season <- 2023
-species <- "GEPE"
-
-# Load penguin observations data
-penguin_obs <- mapppdr::penguin_obs
-
-# Process the penguin observations dataset to match the required format
-penguin_obs_processed <- penguin_obs %>%
-  filter(species_id == species) %>%
-  mutate(
-    presence = ifelse(!is.na(count), 1, 0),
-    known_w = 1) %>%
-  select(site_id, season, presence, known_w, count, accuracy, type)
-
-# Generate the presence/absence assumptions dataset
-presence_absence_assumptions <- expand.grid(
-  site_id = unique(penguin_obs$site_id),
-  season = min_season:max_season
-) %>%
-  left_join(penguin_obs_processed, by = c("site_id", "season")) %>%
-  mutate(
-    presence = ifelse(is.na(presence), 0, presence),
-    known_w = ifelse(is.na(known_w), 0, known_w),
-    count = ifelse(is.na(count), 0, count)) %>%
-  group_by(site_id, season) %>%
-  arrange(desc(type), desc(accuracy), .by_group = TRUE) %>%
-  slice(1) %>%
-  ungroup() %>%
-  select(site_id, season, presence, known_w, count, accuracy)
-
-# Visualize presence/absence data
-plot_data <- presence_absence_assumptions %>%
-  mutate(
-    presence = as.factor(presence),
-    known_w = as.factor(known_w)
-  )
-
-# # Plot with facetting
-# ggplot(plot_data, aes(x = factor(season), y = factor(site_id))) +
-#   geom_tile(aes(fill = presence, color = known_w), size = 1.5) +
-#   scale_fill_manual(values = c("0" = "gray90", "1" = "blue")) +
-#   scale_color_manual(values = c("0" = NA, "1" = "black")) +
-#   labs(
-#     x = "Season",
-#     y = "Site ID",
-#     fill = "Presence",
-#     color = "Known"
-#   ) +
-#   theme_minimal() +
-#   theme(
-#     axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5, size = 8),
-#     axis.text.y = element_text(size = 5),
-#     panel.grid = element_blank()
-#   ) +
-#   facet_wrap(~ site_id, scales = "free_y", ncol = 5) +
-#   coord_fixed(ratio = 1)  # Adjust aspect ratio to make tiles more square
-
-# ggsave("gentoo_presence_absence_plot_facetted.png", width = 20, height = 15)
-
-
-
-```
-
-
-
-**Load the Jags MCMC Output File**
-
-```{r}
-# Load the RDA file
-load("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/model_data_rinits_output.rda")
-
-# Ensure the data is loaded
-print(ls())
-
-# Check the structure of the dataset
-str(model_data_rinits_output)
-
-```
-
-
-**Extract the Gentoo Abundance Estimates (lz)**
-
-lza = logged latent seasonal abudance
-
-The logged latent seasonal nest abundance for the ith site in the tth year, while allowing for site extirpation and colonization events, as lzai,t=lzi,t⋅wi,t. Please see #3 in Section 2.5 for the details regarding wi,t.
-
-
-population growth rate multiplier
-
-```{r}
-#cast the mcmc model into a matrix
-model_samples <- as.matrix(model_data_rinits_output)
-
-
-# Filter columns that are logged latent abundance (lz) parameters
-lz_columns <- grep("^lz\\[", colnames(model_samples)) #logged abundance
-lz_samples <- model_samples[, lz_columns]
-
-#Convert log-abundances to actual abundances
-abundance_samples <- exp(lz_samples)
-
-# Summarize the actual abundances
-abundance_summary <- apply(abundance_samples, 2, function(x) {
-  c(mean = mean(x), median = median(x), 
-    lower_95 = quantile(x, 0.025), upper_95 = quantile(x, 0.975))
-})
-
-# Convert to a readable data frame (use t to transpose)
-abundance_summary_df <- as.data.frame(t(abundance_summary))
-
-
-# Updated extract_indices function
-extract_indices <- function(colname) {
-  indices <- gsub("[^0-9,]", "", colname)
-  as.integer(unlist(strsplit(indices, ",")))
-}
-
-indices <- lapply(colnames(abundance_samples), extract_indices)
-sites <- sapply(indices, `[`, 1)
-seasons <- sapply(indices, `[`, 2)
-
-abundance_summary_df$site <- sites
-abundance_summary_df$season <- seasons
-
-abundance_summary_df <- abundance_summary_df %>% 
-  rename(mean_abundance = mean,
-         median_mean_abundance = median,
-         lower_95_mean_abundance = "lower_95.2.5%",
-         upper_95_mean_abundance = "upper_95.97.5%")
-
-head(abundance_summary_df)
-
-
-```
-
-
-```{r}
-SiteList <- mapppdr::penguin_obs %>%
-  # keep all sites that have at least 1 count between min and max season
-  dplyr::filter(count > 0 & species_id == species & season >= min_season & season <= max_season) %>%
-  # create relative season index 
-  mutate(season_relative = season - min_season + 1) %>%
-  # determine first season a count is observed for each site
-  group_by(site_id) %>%
-  summarise(initial_season = min(season_relative)) %>%
-  ungroup() %>%
-  # join to get other site specific covariates for visualization purposes
-  left_join(mapppdr::sites, by = "site_id") %>%
-  # create site index for model and visualization
-  mutate(site = as.numeric(as.factor(site_id))) %>%
-  dplyr::select(site_id, site_name, ccamlr_id, site, initial_season, latitude, longitude)
-
-(n_sites <- nrow(SiteList))
-
-SiteList %>% 
-  distinct(site, site_id, latitude, longitude )
-  
-
-# Join Site_id Info and Rename
-final_data <- left_join(SiteList, abundance_summary_df, by = "site" )
-
-# Ensure final_data is sorted by site and season
-final_data <- final_data %>%
-  arrange(site, season)
-
-```
-
-**Calculate Growth Rate**
-
-```{r}
-
-# Calculate the growth rate and append it to the data
-final_data <- final_data %>%
-  group_by(site) %>%
-  mutate(growth_rate = mean_abundance / lag(mean_abundance)) %>%
-  ungroup()
-
-# Print the head of the final data with growth rates
-print(head(final_data))
-```
-
-
-```{r}
-
-
-```
-
-
-```{r}
-
-library(stringi)
-library(MCMCvis)
-library(dplyr)
-library(ggplot2)
-library(tidyr)
-
-# Load the RDA file
-load("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/model_data_rinits_output.rda")
-
-# Summarize the latent abundance (lz) parameters
-lz_summary <- MCMCsummary(model_data_rinits_output, params = "lz", HPD = TRUE, hpd_prob = .95, round = 3)
-print(head(lz_summary))
-
-# Extract samples for lz
-lz_samples <- as.matrix(model_data_rinits_output)
-
-# Filter columns that are latent abundance (lz) parameters
-lz_columns <- grep("^lz\\[", colnames(lz_samples))
-lz_samples <- lz_samples[, lz_columns]
-
-# Convert log-abundances to actual abundances
-abundance_samples <- exp(lz_samples)
-
-# Summarize the actual abundances
-abundance_summary <- apply(abundance_samples, 2, function(x) {
-  c(mean = mean(x), median = median(x), 
-    lower_95 = quantile(x, 0.025), upper_95 = quantile(x, 0.975))
-})
-
-# Convert to a readable data frame
-abundance_summary_df <- as.data.frame(t(abundance_summary))
-print(head(abundance_summary_df))
-
-# Extract site and season info from the indices
-extract_indices <- function(colname) {
-  indices <- gsub("[^0-9,]", "", colname)
-  as.integer(unlist(strsplit(indices, ",")))
-}
-
-indices <- lapply(colnames(abundance_samples), extract_indices)
-sites <- sapply(indices, `[`, 1)
-seasons <- sapply(indices, `[`, 2)
-
-abundance_summary_df$site <- sites
-abundance_summary_df$season <- seasons
-
-abundance_summary_df <- abundance_summary_df %>% 
-  rename(mean_abundance = mean,
-         median_abundance = median,
-         lower_95_abundance = "lower_95.2.5%",
-         upper_95_abundance = "upper_95.97.5%")
-
-head(abundance_summary_df)
-
-# Load and prepare SiteList
-SiteList <- mapppdr::penguin_obs %>%
-  filter(count > 0 & species_id == species & season >= min_season & season <= max_season) %>%
-  mutate(season_relative = season - min_season + 1) %>%
-  group_by(site_id) %>%
-  summarise(initial_season = min(season_relative)) %>%
-  ungroup() %>%
-  left_join(mapppdr::sites, by = "site_id") %>%
-  mutate(site = as.numeric(as.factor(site_id))) %>%
-  select(site_id, site_name, ccamlr_id, site, initial_season, latitude, longitude)
-
-(n_sites <- nrow(SiteList))
-
-# Ensure distinct site and site_id combinations
-SiteList %>% 
-  distinct(site, site_id)
-
-# Join SiteList with abundance_summary_df
-final_data <- left_join(SiteList, abundance_summary_df, by = "site")
-
-# Ensure final_data is sorted by site and season
-final_data <- final_data %>%
-  arrange(site, season)
-
-# Calculate the growth rate and append it to the data
-final_data <- final_data %>%
-  group_by(site) %>%
-  mutate(growth_rate = mean_abundance / lag(mean_abundance)) %>%
-  ungroup()
-
-# Print the head of the final data with growth rates
-print(head(final_data))
-
-```
 
 
 ```{r}
@@ -460,6 +148,52 @@ print(head(final_data))
 
 
 ```{r}
+library(ggplot2)
+library(dplyr)
+
+# Calculate geometric mean of growth rates
+final_data <- final_data %>%
+  group_by(site) %>%
+  mutate(geometric_mean_growth_rate = exp(mean(log(growth_rate), na.rm = TRUE))) %>%
+  ungroup()
+
+# Filter data for the specific site
+site_data <- final_data %>% filter(site_id == "AITC")
+
+# Calculate the mean growth multiplier for the site
+mean_growth <- site_data %>% 
+  summarize(mean_growth_multiplier = exp(mean(log(growth_rate), na.rm = TRUE)),
+            lower_ci = exp(mean(log(growth_rate), na.rm = TRUE) - 1.96 * sd(log(growth_rate), na.rm = TRUE)/sqrt(n())),
+            upper_ci = exp(mean(log(growth_rate), na.rm = TRUE) + 1.96 * sd(log(growth_rate), na.rm = TRUE)/sqrt(n())))
+
+# Check if the 'count' and 'type' columns exist and correct them if needed
+if (!"count" %in% names(site_data)) {
+  site_data$count <- site_data$mean_abundance # or any other logic that fits
+}
+
+if (!"type" %in% names(site_data)) {
+  site_data$type <- "nests" # default type, adjust as necessary
+}
+
+# Add year column based on season
+site_data <- site_data %>%
+  mutate(year = 1970 + season - 1)
+
+# Generate the plot
+ggplot(site_data, aes(x = year, y = mean_abundance)) +
+  geom_boxplot(aes(group = year), fill = "orange", alpha = 0.6) +
+  geom_errorbar(aes(ymin = lower_95_abundance, ymax = upper_95_abundance), width = 0.2) +
+  geom_point(data = site_data %>% filter(!is.na(count)), aes(y = count, color = type), size = 3, shape = 21, fill = "blue") +
+  scale_color_manual(values = c("nests" = "red", "chicks" = "blue")) +
+  labs(title = "AITC, Barrientos Island (Aitcho Islands), 48.1",
+       subtitle = paste0("mean population growth multiplier = ", round(mean_growth$mean_growth_multiplier, 3), 
+                         " (", round(mean_growth$lower_ci, 2), " - ", round(mean_growth$upper_ci, 2), ")"),
+       x = "Year",
+       y = "logged abundance",
+       color = "Type") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
 
 
 ```
