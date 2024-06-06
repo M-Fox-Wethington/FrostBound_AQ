@@ -1,13 +1,17 @@
-# Load necessary libraries
+# Load the necessary libraries
 library(terra)
 library(sf)
+library(dplyr)
 library(ggplot2)
 
-# Load Gentoo penguin dataset
-gentoo_file_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/GentooCounts_48_1.csv"
-gentoo_data <- read.csv(gentoo_file_path)
+# Load Gentoo penguin data
+penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
 
-# Load Antarctic coastline shapefile
+# Filter to unique site_ids
+unique_sites <- penguin_data %>%
+  distinct(site_id, .keep_all = TRUE)
+
+# Load coastline shapefile
 coastline_path <- "D:/gis_data_antarctica/coastlines/polygon/add_coastline_medium_res_polygon_v7_5.shp"
 coastline <- st_read(coastline_path)
 
@@ -16,10 +20,8 @@ study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/s
 study_area <- st_read(study_area_path)
 
 # Convert Gentoo penguin data to sf object
-gentoo_sf <- st_as_sf(gentoo_data, coords = c("longitude_epsg_4326", "latitude_epsg_4326"), crs = 4326)
-
-# Transform coordinates to a suitable Antarctic projection
-ant_proj <- st_crs(study_area)$wkt  # Use the same projection as the study area
+gentoo_sf <- st_as_sf(unique_sites, coords = c("longitude", "latitude"), crs = 4326)
+ant_proj <- st_crs(study_area)$wkt
 gentoo_sf <- st_transform(gentoo_sf, ant_proj)
 coastline <- st_transform(coastline, ant_proj)
 study_area <- st_transform(study_area, ant_proj)
@@ -37,14 +39,12 @@ coastline_rast <- rasterize(coastline, r, field = 1, background = NA)
 
 # Create a binary land-water raster (land = NA, water = 0)
 land_water_rast <- ifel(is.na(coastline_rast), 0, NA)
-
-# Mask the land-water raster with the study area
 land_water_rast <- mask(land_water_rast, vect(study_area))
 
 # List to store buffers
 buffer_list <- list()
 
-# Loop through all colonies to calculate buffers
+# Loop through unique colonies to calculate buffers
 for (i in 1:nrow(gentoo_sf)) {
   colony_sf <- gentoo_sf[i, ]
   colony_vect <- vect(colony_sf)
@@ -67,19 +67,26 @@ for (i in 1:nrow(gentoo_sf)) {
   buffer_sf <- st_as_sf(buffer_poly)
   buffer_sf <- buffer_sf[buffer_sf$layer != 0, ]
   
+  # Add site_id to each buffer polygon
+  buffer_sf$site_id <- gentoo_sf$site_id[i]
+  
+  
   buffer_list[[i]] <- buffer_sf
 }
 
-# Combine the separate buffers into a single sf object for plotting
+# Combine the separate buffers into a single sf object for plotting and saving
 combined_buffers_sf <- do.call(rbind, buffer_list)
+# 
+# # Plot the combined buffers over the study area with enhanced visibility
+# ggplot() +
+#   geom_sf(data = study_area, fill = NA, color = "black") +
+#   geom_sf(data = coastline, fill = "grey") +
+#   geom_sf(data = combined_buffers_sf, aes(fill = site_id), alpha = 0.5) +
+#   geom_sf(data = gentoo_sf, color = "red", size = 3) +
+#   theme_minimal() +
+#   labs(title = "Potential Range for All Gentoo Penguin Colonies (300 km)",
+#        fill = "Colony") +
+#   theme(plot.title = element_text(hjust = 0.5))
 
-# Plot the combined buffers over the study area with enhanced visibility
-ggplot() +
-  geom_sf(data = study_area, fill = NA, color = "black") +
-  geom_sf(data = coastline, fill = "grey") +
-  geom_sf(data = combined_buffers_sf, aes(fill = as.factor(layer)), alpha = 0.5) +
-  geom_sf(data = gentoo_sf, color = "red", size = 3) +
-  theme_minimal() +
-  labs(title = "Potential Range for All Gentoo Penguin Colonies (300 km)",
-       fill = "Colony") +
-  theme(plot.title = element_text(hjust = 0.5))
+# Save the combined buffers to a shapefile
+st_write(combined_buffers_sf, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_home-ranges/GEPG_homerange_300km.shp", append=FALSE)
