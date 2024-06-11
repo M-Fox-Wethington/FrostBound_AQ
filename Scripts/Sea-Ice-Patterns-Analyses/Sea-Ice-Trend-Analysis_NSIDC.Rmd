@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
-```{r}
+```{r include=FALSE}
 library(terra)
 
 ```
@@ -28,6 +28,8 @@ print(nsidc_winter)
 
 # Summary of the object
 summary(nsidc_winter)
+
+str(nsidc_winter)
 
 # If it's a SpatRaster, use terra functions to explore further
 if (inherits(nsidc_winter, "SpatRaster")) {
@@ -165,15 +167,39 @@ saveRDS(final_result_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_S
 ```
 
 
-## **Calculate Sea Ice Persistence**
 
 
-```{r Calculate Sea Ice Persistence}
+**Sea Ice Persistence Trend**
+
+
+```{r}
+
+# Load necessary libraries
 library(terra)
+library(viridis)
+library(dplyr)
 library(lubridate)
+library(nlme)
+library(sf) # For handling shapefiles
 
 # Load the NSIDC sea ice concentration data
-nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/NSIDC-Sea-Ice-Index/stack/NSIDC_25km_Study-Area.nc")
+nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/NSIDC_25km_Study-Area.nc")
+
+# Filter the sea ice data from 1980 to 2022
+start_date <- as.Date("1980-01-01")
+end_date <- as.Date("2022-12-31")
+nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+
+# Extract all years for processing
+all_years <- unique(year(time(nsidc)))
+
+# Define winter months (June-September)
+winter_months <- list(
+  June = 6,
+  July = 7,
+  August = 8,
+  September = 9
+)
 
 # Define a function to count days with ice cover > 15% for each year
 count_ice_days <- function(x) {
@@ -181,57 +207,117 @@ count_ice_days <- function(x) {
   return(ice_days)
 }
 
-# Extract the years from the time attribute using lubridate
-years <- unique(year(time(nsidc)))
-
-# Initialize an empty list to store the annual ice day count rasters
-annual_ice_days <- list()
-
-# Loop over each year, subset the raster stack, and apply the counting function
-for (year in years) {
-  year_rasters <- subset(nsidc, year(time(nsidc)) == year)
-  # Apply count_ice_days function across layers (days) at each pixel
-  ice_days_raster <- app(year_rasters, count_ice_days)  # No need for 'along=3', app inherently operates cell-wise
-  names(ice_days_raster) <- paste("Ice_Days", year, sep="_")
-  annual_ice_days[[year]] <- ice_days_raster
-  print(paste("Processed year:", year))
+# Function to process annual and monthly ice persistence
+process_ice_persistence <- function(nsidc, years, months = NULL) {
+  ice_days_list <- list()
+  for (year in years) {
+    if (is.null(months)) {
+      year_rasters <- subset(nsidc, year(time(nsidc)) == year)
+    } else {
+      year_rasters <- subset(nsidc, which(year(time(nsidc)) == year & month(time(nsidc)) %in% months))
+    }
+    if (nlyr(year_rasters) > 0) {
+      ice_days_raster <- app(year_rasters, count_ice_days)
+      names(ice_days_raster) <- paste("Ice_Days", year, sep = "_")
+      ice_days_list[[as.character(year)]] <- ice_days_raster
+      print(paste("Processed year:", year, "month:", ifelse(is.null(months), "Annual", paste(months, collapse = ","))))
+    } else {
+      print(paste("No data for year:", year, "month:", ifelse(is.null(months), "Annual", paste(months, collapse = ","))))
+    }
+  }
+  ice_days_stack <- rast(ice_days_list)
+  return(mask(ice_days_stack, nsidc[[1]], maskvalues = NA))
 }
 
-# Combine the annual rasters into a single stack
-annual_ice_days_stack <- rast(annual_ice_days)
+# Calculate annual ice persistence
+annual_ice_days_stack <- process_ice_persistence(nsidc, all_years)
 
-# Save the resulting stack to disk
-writeRaster(annual_ice_days_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/substack/Annual_Ice_Days_Stack.tif", overwrite=TRUE)
+# Calculate monthly ice persistence
+monthly_ice_days_stacks <- lapply(winter_months, function(month) {
+  process_ice_persistence(nsidc, all_years, month)
+})
+
+# Load the study area shapefile
+study_area <- st_read("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp")
+
+# Mask the sea ice persistence rasters to the study area
+mask_to_study_area <- function(raster_stack, study_area) {
+  mask(raster_stack, vect(study_area))
+}
+
+# Apply the mask to the study area for annual and monthly data
+annual_ice_days_stack_masked <- mask_to_study_area(annual_ice_days_stack, study_area)
+monthly_ice_days_stacks_masked <- lapply(monthly_ice_days_stacks, mask_to_study_area, study_area)
+
+# Function to calculate slope for each pixel
+calculate_slope <- function(values, years) {
+  model <- lm(values ~ years)
+  return(coef(model)[2])  # Extract the slope coefficient
+}
+
+# Calculate slope for annual ice persistence
+slope_raster_annual <- annual_ice_days_stack_masked[[1]]
+values(slope_raster_annual) <- NA
+
+for (i in 1:ncell(annual_ice_days_stack_masked)) {
+  pixel_values <- values(annual_ice_days_stack_masked)[i, ]
+  if (all(is.na(pixel_values))) next
+  slope_raster_annual[i] <- calculate_slope(pixel_values, all_years)
+}
+
+# Calculate slopes for monthly ice persistence
+slope_rasters_monthly <- lapply(monthly_ice_days_stacks_masked, function(stack) {
+  slope_raster <- stack[[1]]
+  values(slope_raster) <- NA
+  for (i in 1:ncell(stack)) {
+    pixel_values <- values(stack)[i, ]
+    if (all(is.na(pixel_values))) next
+    slope_raster[i] <- calculate_slope(pixel_values, all_years)
+  }
+  return(slope_raster)
+})
+
+# Function to convert slopes to days of ice cover change per year
+convert_to_days <- function(slope_raster, period_length) {
+  return(slope_raster * period_length)
+}
+
+# Calculate the length of the study period in years
+period_length <- length(all_years)
+
+# Convert the slopes to days of ice cover change per year
+slope_raster_annual_days <- convert_to_days(slope_raster_annual, period_length)
+slope_rasters_monthly_days <- lapply(slope_rasters_monthly, convert_to_days, period_length)
+
+# Determine the common range for the color scale without normalization
+all_rasters_days <- c(list(slope_raster_annual_days), slope_rasters_monthly_days)
+common_range_days <- range(sapply(all_rasters_days, function(r) range(values(r), na.rm = TRUE)))
+
+# Visualize the trends for annual and monthly ice persistence with a common color scale
+par(mfrow = c(2, 3))
+plot(slope_raster_annual_days, main = "Annual Sea Ice Persistence Trend (1980-2022)", 
+     col = viridis(100, option = "D"), zlim = common_range_days, colNA = "white")
+plot(slope_rasters_monthly_days[[1]], main = "June Sea Ice Persistence Trend (1980-2022)", 
+     col = viridis(100, option = "D"), zlim = common_range_days, colNA = "white")
+plot(slope_rasters_monthly_days[[2]], main = "July Sea Ice Persistence Trend (1980-2022)", 
+     col = viridis(100, option = "D"), zlim = common_range_days, colNA = "white")
+plot(slope_rasters_monthly_days[[3]], main = "August Sea Ice Persistence Trend (1980-2022)", 
+     col = viridis(100, option = "D"), zlim = common_range_days, colNA = "white")
+plot(slope_rasters_monthly_days[[4]], main = "September Sea Ice Persistence Trend (1980-2022)", 
+     col = viridis(100, option = "D"), zlim = common_range_days, colNA = "white")
+
+# Adding legends
+legend("bottomleft", legend = c("Decrease", "Increase"), fill = c("red", "blue"), title = "Sea Ice Change (days/year)")
+
+
+
 
 
 ```
 
 
-**Plot Sea Ice Persistence Trends**
 
-```{r Plot Sea Ice Persistence Trends}
 
-library(terra)
-library(RColorBrewer)
-
-# Assuming 'annual_ice_days_stack' is already loaded and contains the necessary layers
-
-# Define the color palette
-color_palette <- rev(brewer.pal(9, "Blues"))
-
-# Set up the multi-panel plot layout
-par(mfrow = c(2, 2))
-
-# Plot each year's data using a consistent color scale from 0 to 365 days
-plot(annual_ice_days_stack$Ice_Days_1988, main = "Ice Days 1988", col=color_palette, breaks=seq(0, 365, length.out = length(color_palette) + 1))
-plot(annual_ice_days_stack$Ice_Days_1990, main = "Ice Days 1995", col=color_palette, breaks=seq(0, 365, length.out = length(color_palette) + 1))
-plot(annual_ice_days_stack$Ice_Days_2020, main = "Ice Days 2020", col=color_palette, breaks=seq(0, 365, length.out = length(color_palette) + 1))
-plot(annual_ice_days_stack$Ice_Days_2023, main = "Ice Days 2023", col=color_palette, breaks=seq(0, 365, length.out = length(color_palette) + 1))
-
-# Reset the plot layout
-par(mfrow = c(1, 1))
-
-```
 
 
 
@@ -377,9 +463,9 @@ library(wesanderson)
 library(scales)
 
 # Load your dataset
-readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
+nsidc_metrics <-readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/analysis/NSIDC_25km_Daily_Metrics.rds")
 
-
+str(nsidc_metrics)
 # Filter for winter months (June - September) and add Year, Month, and Day columns
 winter_metrics <- nsidc_metrics %>%
   mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
