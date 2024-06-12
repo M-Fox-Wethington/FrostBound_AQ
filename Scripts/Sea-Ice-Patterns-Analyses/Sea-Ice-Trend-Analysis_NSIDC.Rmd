@@ -177,601 +177,672 @@ library(dplyr)
 library(lubridate)
 library(nlme)
 library(ggplot2)
+library(grDevices)  # For colorRampPalette
+library(gridExtra)  # For arranging plots side by side
 
-# Define the directory containing the subregion files
-chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack"
-chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)
-
-# Define the threshold for sea ice concentration
-ice_threshold <- 15
-
-# Define the date range for analysis
-start_year <- 1981
-end_year <- 2023
-
-# Function to calculate consecutive days above threshold
-calculate_duration <- function(x, threshold) {
-  if (all(is.na(x))) return(NA)  # Return NA if all values are NA
-  rle_result <- rle(x > threshold)
-  max_duration <- ifelse(any(rle_result$values), max(rle_result$lengths[rle_result$values]), 0)
-  return(max_duration)
-}
-
-# Simplified function to process each chunk file using app
-process_chunk <- function(file_path) {
-  region_name <- gsub(".*/|\\.nc$", "", file_path)  # Extract the region name from the file path
-  message(paste("Processing file:", file_path))
+# Define the function
+analyze_sea_ice <- function(start_year, end_year, use_mask = TRUE, report_metrics = c("concentration", "duration", "persistence")) {
   
-  # Load the NSIDC sea ice concentration data for the subregion
-  nsidc <- rast(file_path)
-  print("Loaded NSIDC data:")
-  print(nsidc)
+  # Define file paths
+  chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack"
+  chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)
+  study_area_shapefile <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
   
-  annual_persistence <- list()
-  annual_duration <- list()
+  # Load the study area shapefile
+  if (use_mask) {
+    study_area <- vect(study_area_shapefile)
+  }
   
-  for (year in start_year:end_year) {
-    message(paste("Processing year:", year))
-    start_date <- as.Date(paste0(year, "-01-01"))
-    end_date <- as.Date(paste0(year, "-12-31"))
+  # Define the threshold for sea ice concentration
+  ice_threshold <- 15
+  
+  # Function to calculate consecutive days above threshold
+  calculate_duration <- function(x, threshold) {
+    if (all(is.na(x))) return(NA)
+    rle_result <- rle(x > threshold)
+    max_duration <- ifelse(any(rle_result$values), max(rle_result$lengths[rle_result$values]), 0)
+    return(max_duration)
+  }
+  
+  # Simplified function to process each chunk file using app
+  process_chunk <- function(file_path) {
+    region_name <- gsub(".*/|\\.nc$", "", file_path)
+    message(paste("Processing file:", file_path))
     
-    # Filter the sea ice data for the current year
-    nsidc_year <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+    # Load the NSIDC sea ice concentration data for the subregion
+    nsidc <- rast(file_path)
     
-    if (nlyr(nsidc_year) == 0) {
-      message(paste("No data for year:", year))
-      next
+    annual_persistence <- list()
+    annual_duration <- list()
+    annual_concentration <- list()
+    
+    for (year in start_year:end_year) {
+      message(paste("Processing year:", year))
+      start_date <- as.Date(paste0(year, "-01-01"))
+      end_date <- as.Date(paste0(year, "-12-31"))
+      
+      # Filter the sea ice data for the current year
+      nsidc_year <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+      
+      if (nlyr(nsidc_year) == 0) {
+        message(paste("No data for year:", year))
+        next
+      }
+      
+      # Calculate metrics based on options
+      if ("persistence" %in% report_metrics) {
+        persistence <- app(nsidc_year, function(x) sum(x > ice_threshold, na.rm = TRUE))
+        names(persistence) <- paste0("Persistence_", year)
+        annual_persistence[[as.character(year)]] <- persistence
+      }
+      
+      if ("duration" %in% report_metrics) {
+        duration <- app(nsidc_year, function(x) calculate_duration(x, ice_threshold))
+        names(duration) <- paste0("Duration_", year)
+        annual_duration[[as.character(year)]] <- duration
+      }
+      
+      if ("concentration" %in% report_metrics) {
+        concentration <- app(nsidc_year, function(x) mean(x, na.rm = TRUE))
+        names(concentration) <- paste0("Concentration_", year)
+        annual_concentration[[as.character(year)]] <- concentration
+      }
     }
     
-    # Calculate persistence: number of days with ice concentration above the threshold for each pixel
-    persistence <- app(nsidc_year, function(x) sum(x > ice_threshold, na.rm = TRUE))
-    names(persistence) <- paste0("Persistence_", year)
-    message("Calculated persistence")
-    
-    # Calculate duration: maximum consecutive days with ice concentration above the threshold for each pixel
-    duration <- app(nsidc_year, function(x) calculate_duration(x, ice_threshold))
-    names(duration) <- paste0("Duration_", year)
-    message("Calculated duration")
-    
-    annual_persistence[[as.character(year)]] <- persistence
-    annual_duration[[as.character(year)]] <- duration
+    message(paste("Finished processing file:", file_path))
+    return(list(persistence = annual_persistence, duration = annual_duration, concentration = annual_concentration))
   }
   
-  message(paste("Finished processing file:", file_path))
-  return(list(persistence = annual_persistence, duration = annual_duration))
-}
-
-# Process each chunk file sequentially
-results <- lapply(chunk_files, process_chunk)
-
-# Combine all annual rasters into a single stack for persistence and duration
-combine_rasters <- function(raster_list) {
-  raster_stack <- rast()
-  for (year in names(raster_list)) {
-    if (!is.null(raster_list[[year]])) {
-      raster_stack <- c(raster_stack, raster_list[[year]])
+  # Process each chunk file sequentially
+  results <- lapply(chunk_files, process_chunk)
+  
+  # Combine all annual rasters into a single stack for the selected metrics
+  combine_rasters <- function(raster_list) {
+    raster_stack <- rast()
+    for (year in names(raster_list)) {
+      if (!is.null(raster_list[[year]])) {
+        raster_stack <- c(raster_stack, raster_list[[year]])
+      }
     }
+    return(raster_stack)
   }
-  return(raster_stack)
-}
-
-# Combine results for all files
-persistence_stack <- combine_rasters(do.call(c, lapply(results, `[[`, "persistence")))
-duration_stack <- combine_rasters(do.call(c, lapply(results, `[[`, "duration")))
-
-# Function to apply linear model to each pixel
-apply_lm <- function(y) {
-  if (all(is.na(y))) {
-    return(NA)
-  } else {
-    years <- start_year:end_year
-    fit <- lm(y ~ years)
-    return(coef(fit)[2])  # Return the slope of the linear model
+  
+  persistence_stack <- NULL
+  duration_stack <- NULL
+  concentration_stack <- NULL
+  
+  if ("persistence" %in% report_metrics) {
+    persistence_stack <- combine_rasters(do.call(c, lapply(results, `[[`, "persistence")))
+    if (use_mask) persistence_stack <- mask(persistence_stack, study_area)
   }
-}
-
-# Apply the linear model to each pixel in the persistence stack
-persistence_trend <- app(persistence_stack, apply_lm)
-
-# Apply the linear model to each pixel in the duration stack
-duration_trend <- app(duration_stack, apply_lm)
-
-# Define a color palette with red for negative values and blue for positive values
-trend_colors <- colorRampPalette(c("red", "white", "blue"))
-
-# Plotting the trends with custom colors
-plot(persistence_trend, main="Trend of Persistence Over Time", col=trend_colors(100))
-plot(duration_trend, main="Trend of Duration Over Time", col=trend_colors(100))
-
-
-
-
-```
-
-
-
-
-
-
-
-
-
-
-
-
-**Sea Ice Duration**
-```{r}
-
-# Load necessary libraries
-library(terra)
-library(dplyr)
-library(lubridate)
-
-# Define the directory containing the subregion files
-chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack"
-chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)
-
-# Define the threshold for sea ice concentration
-ice_threshold <- 15
-
-# Define the date range for analysis
-start_date <- as.Date("2021-01-01")
-end_date <- as.Date("2022-12-31")
-
-# Simplified function to process each chunk file using app
-process_chunk <- function(file_path) {
-  region_name <- gsub(".*/|\\.nc$", "", file_path)  # Extract the region name from the file path
-  message(paste("Processing file:", file_path))
   
-  # Load the NSIDC sea ice concentration data for the subregion
-  nsidc <- rast(file_path)
-  print("Loaded NSIDC data:")
-  print(nsidc)
+  if ("duration" %in% report_metrics) {
+    duration_stack <- combine_rasters(do.call(c, lapply(results, `[[`, "duration")))
+    if (use_mask) duration_stack <- mask(duration_stack, study_area)
+  }
   
-  # Filter the sea ice data from 2021 to 2022
-  nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
-  print("Filtered NSIDC data:")
-  print(nsidc)
+  if ("concentration" %in% report_metrics) {
+    concentration_stack <- combine_rasters(do.call(c, lapply(results, `[[`, "concentration")))
+    if (use_mask) concentration_stack <- mask(concentration_stack, study_area)
+  }
   
-  # Count the number of days with ice concentration above the threshold for each pixel
-  valid_obs <- app(nsidc, function(x) sum(x > ice_threshold, na.rm = TRUE))
-  names(valid_obs) <- "Count_Above_Threshold"
-  
-  # Calculate the statistics for each annual raster layer
-  stats <- data.frame(
-    Region = region_name,
-    Min_Days = min(valid_obs[], na.rm = TRUE),
-    Max_Days = max(valid_obs[], na.rm = TRUE),
-    Mean_Days = mean(valid_obs[], na.rm = TRUE),
-    Median_Days = median(valid_obs[], na.rm = TRUE),
-    Start_Date = start_date,
-    End_Date = end_date
-  )
-  
-  # Plot the raster
-  plot(valid_obs, main = paste("Sea Ice Concentration Above Threshold for", region_name), col = hcl.colors(100, "Blues", rev = TRUE))
-  
-  return(stats)
-}
-
-# Process each chunk file sequentially
-results <- lapply(chunk_files, process_chunk)
-
-# Combine all results into a single dataframe
-count_obs_df <- do.call(rbind, results)
-
-# View the results
-print(count_obs_df)
-
-
-
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-**Sea Ice Persistence Trend**
-
-
-```{r}
-
-# Load necessary libraries
-library(terra)
-library(sf)
-library(dplyr)
-library(ggplot2)
-library(lubridate)
-library(nlme)
-
-# Load study area shapefile
-study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
-study_area <- st_read(study_area_path)
-
-# Load the NSIDC sea ice concentration data
-nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/NSIDC_25km_Study-Area.nc")
-
-# Filter the sea ice data from 1980 to 2022
-start_date <- as.Date("2010-01-01")
-end_date <- as.Date("2022-12-31")
-nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
-
-# Mask the sea ice data with the study area
-study_area_mask <- mask(nsidc, vect(study_area))
-
-# Extract all years for processing
-all_years <- unique(year(time(study_area_mask)))
-
-# Define winter months (June-September)
-winter_months <- c(6, 7, 8, 9)
-
-# Define a function to count days with ice cover > 15% for each year and each month
-count_ice_days <- function(x) {
-  ice_days <- sum(x > 15, na.rm = TRUE)
-  return(ice_days)
-}
-
-# Initialize empty lists to store the monthly ice day count rasters
-annual_ice_days_june <- list()
-annual_ice_days_july <- list()
-annual_ice_days_august <- list()
-annual_ice_days_september <- list()
-
-# Loop over each year, subset the raster stack for each month, and apply the counting function
-for (year in all_years) {
-  for (month in winter_months) {
-    month_rasters <- subset(study_area_mask, which(year(time(study_area_mask)) == year & month(time(study_area_mask)) == month))
-    if (nlyr(month_rasters) > 0) {
-      ice_days_raster <- app(month_rasters, count_ice_days)  # app inherently operates cell-wise
-      names(ice_days_raster) <- paste("Ice_Days", year, month, sep="_")
-      if (month == 6) annual_ice_days_june[[as.character(year)]] <- ice_days_raster
-      if (month == 7) annual_ice_days_july[[as.character(year)]] <- ice_days_raster
-      if (month == 8) annual_ice_days_august[[as.character(year)]] <- ice_days_raster
-      if (month == 9) annual_ice_days_september[[as.character(year)]] <- ice_days_raster
-      print(paste("Processed year:", year, "month:", month))
+  # Function to apply linear model to each pixel and return slope and p-value
+  apply_lm <- function(y) {
+    if (all(is.na(y))) {
+      return(c(NA, NA))
     } else {
-      print(paste("No data for year:", year, "month:", month))
-    }
-  }
-}
-
-# Combine the annual rasters into separate stacks for each month
-annual_ice_days_stack_june <- rast(annual_ice_days_june)
-annual_ice_days_stack_july <- rast(annual_ice_days_july)
-annual_ice_days_stack_august <- rast(annual_ice_days_august)
-annual_ice_days_stack_september <- rast(annual_ice_days_september)
-
-# Calculate the proportion of open water days for each month and year
-calculate_open_water_days <- function(annual_ice_days_stack, years) {
-  open_water_days <- sapply(years, function(y) {
-    ice_days_raster <- subset(annual_ice_days_stack, names(annual_ice_days_stack) == as.character(y))
-    open_water_prop <- global(ice_days_raster, fun = function(x) mean(x < 15, na.rm = TRUE))
-    return(open_water_prop)
-  })
-  return(open_water_days)
-}
-
-open_water_days_june <- calculate_open_water_days(annual_ice_days_stack_june, all_years)
-open_water_days_july <- calculate_open_water_days(annual_ice_days_stack_july, all_years)
-open_water_days_august <- calculate_open_water_days(annual_ice_days_stack_august, all_years)
-open_water_days_september <- calculate_open_water_days(annual_ice_days_stack_september, all_years)
-
-# Convert the open water days to data frames for analysis
-open_water_df_june <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_june))
-open_water_df_july <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_july))a
-open_water_df_august <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_august))
-open_water_df_september <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_september))
-
-# Perform GLS analysis for each month to examine the long-term trends
-gls_model_june <- gls(open_water_prop ~ year, data = open_water_df_june, correlation = corAR1())
-gls_model_july <- gls(open_water_prop ~ year, data = open_water_df_july, correlation = corAR1())
-gls_model_august <- gls(open_water_prop ~ year, data = open_water_df_august, correlation = corAR1())
-gls_model_september <- gls(open_water_prop ~ year, data = open_water_df_september, correlation = corAR1())
-
-# Summarize the GLS models
-summary(gls_model_june)
-summary(gls_model_july)
-summary(gls_model_august)
-summary(gls_model_september)
-
-# Visualize the long-term trends for each month
-ggplot(open_water_df_june, aes(x = year, y = open_water_prop)) +
-  geom_line() +
-  geom_smooth(method = "lm", se = TRUE) +
-  theme_minimal() +
-  labs(title = "Long-term Trend of Open Water Days in June",
-       x = "Year",
-       y = "Proportion of Open Water Days")
-
-ggplot(open_water_df_july, aes(x = year, y = open_water_prop)) +
-  geom_line() +
-  geom_smooth(method = "lm", se = TRUE) +
-  theme_minimal() +
-  labs(title = "Long-term Trend of Open Water Days in July",
-       x = "Year",
-       y = "Proportion of Open Water Days")
-
-ggplot(open_water_df_august, aes(x = year, y = open_water_prop)) +
-  geom_line() +
-  geom_smooth(method = "lm", se = TRUE) +
-  theme_minimal() +
-  labs(title = "Long-term Trend of Open Water Days in August",
-       x = "Year",
-       y = "Proportion of Open Water Days")
-
-ggplot(open_water_df_september, aes(x = year, y = open_water_prop)) +
-  geom_line() +
-  geom_smooth(method = "lm", se = TRUE) +
-  theme_minimal() +
-  labs(title = "Long-term Trend of Open Water Days in September",
-       x = "Year",
-       y = "Proportion of Open Water Days")
-
-# Analyze trends for the entire study area and subregions
-subregions <- split(study_area, study_area$subregion_id)
-
-subregion_results <- lapply(subregions, function(subregion) {
-  subregion_mask <- mask(nsidc, vect(subregion))
-  
-  subregion_open_water_days <- sapply(all_years, function(y) {
-    subregion_year_rasters <- subset(subregion_mask, which(year(time(subregion_mask)) == y))
-    open_water_prop <- global(subregion_year_rasters, fun = function(x) mean(x < 15, na.rm = TRUE))
-    return(open_water_prop)
-  })
-  
-  return(data.frame(year = all_years, open_water_prop = unlist(subregion_open_water_days), subregion_id = unique(subregion$subregion_id)))
-})
-
-subregion_open_water_df <- do.call(rbind, subregion_results)
-
-# Perform GLS analysis for each subregion
-subregion_gls_results <- subregion_open_water_df %>%
-  group_by(subregion_id) %>%
-  do(model = gls(open_water_prop ~ year, data = ., correlation = corAR1()))
-
-# Summarize GLS models for subregions
-subregion_gls_summaries <- subregion_gls_results %>%
-  summarise(model_summary = list(summary(model)))
-
-# Visualize long-term trends for subregions
-ggplot(subregion_open_water_df, aes(x = year, y = open_water_prop, color = factor(subregion_id))) +
-  geom_line() +
-  geom_smooth(method = "lm", se = TRUE) +
-  theme_minimal() +
-  labs(title = "Long-term Trend of Open Water Days by Subregion",
-       x = "Year",
-       y = "Proportion of Open Water Days",
-       color = "Subregion ID")
-
-
-
-
-```
-
-
-
-**Persistence analysis - under production**
-```{r}
-# Load necessary libraries
-library(terra)
-library(sf)
-library(dplyr)
-library(ggplot2)
-library(lubridate)
-library(nlme)
-
-# Define the directory containing the subregion files
-chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack"
-chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)
-
-# Define a function to process each chunk file
-process_chunk <- function(file_path) {
-  region_name <- gsub(".*/|\\.nc$", "", file_path)  # Extract the region name from the file path
-  message(paste("Processing file:", file_path))
-  
-  # Load the NSIDC sea ice concentration data for the subregion
-  nsidc <- rast(file_path)
-  
-  # Filter the sea ice data from 2010 to 2022
-  start_date <- as.Date("2010-01-01")
-  end_date <- as.Date("2022-12-31")
-  nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
-  
-  # Extract all years for processing
-  all_years <- unique(year(time(nsidc)))
-  
-  # Define winter months (June-September)
-  winter_months <- c(6, 7, 8, 9)
-  
-  # Define a function to count days with ice cover > 15% for each year and each month
-  count_ice_days <- function(x) {
-    ice_days <- sum(x > 15, na.rm = TRUE)
-    return(ice_days)
-  }
-  
-  # Initialize empty lists to store the monthly and annual ice day count rasters
-  annual_ice_days <- list()
-  annual_ice_days_june <- list()
-  annual_ice_days_july <- list()
-  annual_ice_days_august <- list()
-  annual_ice_days_september <- list()
-  
-  # Loop over each year, subset the raster stack for each month and annual, and apply the counting function
-  for (year in all_years) {
-    year_rasters <- subset(nsidc, which(year(time(nsidc)) == year))
-    if (nlyr(year_rasters) > 0) {
-      ice_days_raster <- app(year_rasters, count_ice_days)
-      names(ice_days_raster) <- paste("Ice_Days", year, "Annual", sep="_")
-      annual_ice_days[[as.character(year)]] <- ice_days_raster
-    }
-    
-    for (month in winter_months) {
-      month_rasters <- subset(nsidc, which(year(time(nsidc)) == year & month(time(nsidc)) == month))
-      if (nlyr(month_rasters) > 0) {
-        ice_days_raster <- app(month_rasters, count_ice_days)  # app inherently operates cell-wise
-        names(ice_days_raster) <- paste("Ice_Days", year, month, sep="_")
-        if (month == 6) annual_ice_days_june[[as.character(year)]] <- ice_days_raster
-        if (month == 7) annual_ice_days_july[[as.character(year)]] <- ice_days_raster
-        if (month == 8) annual_ice_days_august[[as.character(year)]] <- ice_days_raster
-        if (month == 9) annual_ice_days_september[[as.character(year)]] <- ice_days_raster
-        message(paste("Processed year:", year, "month:", month))
+      years <- start_year:end_year
+      fit <- tryCatch(lm(y ~ years), error = function(e) return(NULL))
+      if (is.null(fit)) {
+        return(c(NA, NA))
       } else {
-        message(paste("No data for year:", year, "month:", month))
+        slope <- coef(fit)[2]  # Slope of the linear model
+        p_value <- summary(fit)$coefficients[2, 4]  # p-value for the slope
+        return(c(slope, p_value))
       }
     }
   }
   
-  # Combine the annual rasters into separate stacks for each month and for the entire year
-  annual_ice_days_stack <- rast(annual_ice_days)
-  annual_ice_days_stack_june <- rast(annual_ice_days_june)
-  annual_ice_days_stack_july <- rast(annual_ice_days_july)
-  annual_ice_days_stack_august <- rast(annual_ice_days_august)
-  annual_ice_days_stack_september <- rast(annual_ice_days_september)
+  persistence_trend <- NULL
+  duration_trend <- NULL
+  concentration_trend <- NULL
   
-  # Calculate the proportion of open water days for each year and each month
-  calculate_open_water_days <- function(annual_ice_days_stack, years) {
-    open_water_days <- sapply(years, function(y) {
-      ice_days_raster <- subset(annual_ice_days_stack, names(annual_ice_days_stack) == as.character(y))
-      open_water_prop <- global(ice_days_raster, fun = function(x) mean(x < 15, na.rm = TRUE))
-      return(open_water_prop)
-    })
-    return(open_water_days)
+  if (!is.null(persistence_stack)) persistence_trend <- app(persistence_stack, apply_lm)
+  if (!is.null(duration_stack)) duration_trend <- app(duration_stack, apply_lm)
+  if (!is.null(concentration_stack)) concentration_trend <- app(concentration_stack, apply_lm)
+  
+  # Extract slopes and p-values from the results
+  persistence_slope <- NULL
+  persistence_pvalue <- NULL
+  duration_slope <- NULL
+  duration_pvalue <- NULL
+  concentration_slope <- NULL
+  concentration_pvalue <- NULL
+  
+  if (!is.null(persistence_trend)) {
+    persistence_slope <- persistence_trend[[1]]
+    persistence_pvalue <- persistence_trend[[2]]
   }
   
-  open_water_days_annual <- calculate_open_water_days(annual_ice_days_stack, all_years)
-  open_water_days_june <- calculate_open_water_days(annual_ice_days_stack_june, all_years)
-  open_water_days_july <- calculate_open_water_days(annual_ice_days_stack_july, all_years)
-  open_water_days_august <- calculate_open_water_days(annual_ice_days_stack_august, all_years)
-  open_water_days_september <- calculate_open_water_days(annual_ice_days_stack_september, all_years)
-  
-  # Convert the open water days to data frames for analysis
-  open_water_df_annual <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_annual))
-  open_water_df_june <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_june))
-  open_water_df_july <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_july))
-  open_water_df_august <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_august))
-  open_water_df_september <- data.frame(year = all_years, open_water_prop = unlist(open_water_days_september))
-  
-  # Function to perform GLS analysis and check for sufficient data
-  perform_gls <- function(df) {
-    if (sum(!is.na(df$open_water_prop)) < 2) {
-      return(NULL)
-    }
-    tryCatch({
-      model <- gls(open_water_prop ~ year, data = df, correlation = corAR1())
-      return(summary(model))
-    }, error = function(e) {
-      message(paste("Error in GLS analysis:", e$message))
-      return(NULL)
-    })
+  if (!is.null(duration_trend)) {
+    duration_slope <- duration_trend[[1]]
+    duration_pvalue <- duration_trend[[2]]
   }
   
-  # Perform GLS analysis for each period to examine the long-term trends
-  summary_annual <- perform_gls(open_water_df_annual)
-  summary_june <- perform_gls(open_water_df_june)
-  summary_july <- perform_gls(open_water_df_july)
-  summary_august <- perform_gls(open_water_df_august)
-  summary_september <- perform_gls(open_water_df_september)
-  
-  message(paste("Summary for Annual in region:", region_name))
-  print(summary_annual)
-  
-  message(paste("Summary for June in region:", region_name))
-  print(summary_june)
-  
-  message(paste("Summary for July in region:", region_name))
-  print(summary_july)
-  
-  message(paste("Summary for August in region:", region_name))
-  print(summary_august)
-  
-  message(paste("Summary for September in region:", region_name))
-  print(summary_september)
-  
-  # Visualize the long-term trends for each period
-  if (!is.null(summary_annual)) {
-    p_annual <- ggplot(open_water_df_annual, aes(x = year, y = open_water_prop)) +
-      geom_line() +
-      geom_smooth(method = "lm", se = TRUE) +
-      theme_minimal() +
-      labs(title = paste("Long-term Trend of Open Water Days (Annual) -", region_name),
-           x = "Year",
-           y = "Proportion of Open Water Days")
-    
-    ggsave(filename = paste0("Trend_Annual_", region_name, ".png"), plot = p_annual, width = 10, height = 6)
+  if (!is.null(concentration_trend)) {
+    concentration_slope <- concentration_trend[[1]]
+    concentration_pvalue <- concentration_trend[[2]]
   }
   
-  if (!is.null(summary_june)) {
-    p_june <- ggplot(open_water_df_june, aes(x = year, y = open_water_prop)) +
-      geom_line() +
-      geom_smooth(method = "lm", se = TRUE) +
-      theme_minimal() +
-      labs(title = paste("Long-term Trend of Open Water Days in June -", region_name),
-           x = "Year",
-           y = "Proportion of Open Water Days")
-    
-    ggsave(filename = paste0("Trend_June_", region_name, ".png"), plot = p_june, width = 10, height = 6)
+  # Verify the integrity of the data
+  if (!is.null(persistence_slope)) {
+    print("Summary of persistence slope layer:")
+    print(summary(persistence_slope))
+    print("Summary of persistence p-value layer:")
+    print(summary(persistence_pvalue))
   }
   
-  if (!is.null(summary_july)) {
-    p_july <- ggplot(open_water_df_july, aes(x = year, y = open_water_prop)) +
-      geom_line() +
-      geom_smooth(method = "lm", se = TRUE) +
-      theme_minimal() +
-      labs(title = paste("Long-term Trend of Open Water Days in July -", region_name),
-           x = "Year",
-           y = "Proportion of Open Water Days")
-    
-    ggsave(filename = paste0("Trend_July_", region_name, ".png"), plot = p_july, width = 10, height = 6)
+  if (!is.null(duration_slope)) {
+    print("Summary of duration slope layer:")
+    print(summary(duration_slope))
+    print("Summary of duration p-value layer:")
+    print(summary(duration_pvalue))
   }
   
-  if (!is.null(summary_august)) {
-    p_august <- ggplot(open_water_df_august, aes(x = year, y = open_water_prop)) +
-      geom_line() +
-      geom_smooth(method = "lm", se = TRUE) +
-      theme_minimal() +
-      labs(title = paste("Long-term Trend of Open Water Days in August -", region_name),
-           x = "Year",
-           y = "Proportion of Open Water Days")
-    
-    ggsave(filename = paste0("Trend_August_", region_name, ".png"), plot = p_august, width = 10, height = 6)
+  if (!is.null(concentration_slope)) {
+    print("Summary of concentration slope layer:")
+    print(summary(concentration_slope))
+    print("Summary of concentration p-value layer:")
+    print(summary(concentration_pvalue))
   }
   
-  if (!is.null(summary_september)) {
-    p_september <- ggplot(open_water_df_september, aes(x = year, y = open_water_prop)) +
-      geom_line() +
-      geom_smooth(method = "lm", se = TRUE) +
-      theme_minimal() +
-      labs(title = paste("Long-term Trend of Open Water Days in September -", region_name),
-           x = "Year",
-           y = "Proportion of Open Water Days")
-    
-    ggsave(filename = paste0("Trend_September_", region_name, ".png"), plot = p_september, width = 10, height = 6)
+  # Define a significance level
+  alpha <- 0.05
+  
+  # Calculate statistics for persistence
+  if (!is.null(persistence_slope)) {
+    persistence_values <- values(persistence_slope)
+    persistence_pvalues <- values(persistence_pvalue)
+    persistence_data <- cbind(persistence_values, persistence_pvalues)
+    persistence_data <- persistence_data[complete.cases(persistence_data), ]
+    persistence_values <- persistence_data[, 1]
+    persistence_pvalues <- persistence_data[, 2]
+    persistence_mean <- mean(persistence_values)
+    persistence_median <- median(persistence_values)
+    persistence_min <- min(persistence_values)
+    persistence_max <- max(persistence_values)
+    persistence_significant <- sum(persistence_pvalues <= alpha) / length(persistence_pvalues) * 100
+    persistence_positive <- sum(persistence_pvalues <= alpha & persistence_values > 0) / length(persistence_pvalues) * 100
+    persistence_negative <- sum(persistence_pvalues <= alpha & persistence_values < 0) / length(persistence_pvalues) * 100
+    persistence_nonsignificant <- 100 - persistence_significant
   }
   
-  return(list(Region = region_name, 
-              Annual = summary_annual, 
-              June = summary_june, 
-              July = summary_july, 
-              August = summary_august, 
-              September = summary_september))
+  # Calculate statistics for duration
+  if (!is.null(duration_slope)) {
+    duration_values <- values(duration_slope)
+    duration_pvalues <- values(duration_pvalue)
+    duration_data <- cbind(duration_values, duration_pvalues)
+    duration_data <- duration_data[complete.cases(duration_data), ]
+    duration_values <- duration_data[, 1]
+    duration_pvalues <- duration_data[, 2]
+    duration_mean <- mean(duration_values)
+    duration_median <- median(duration_values)
+    duration_min <- min(duration_values)
+    duration_max <- max(duration_values)
+    duration_significant <- sum(duration_pvalues <= alpha) / length(duration_pvalues) * 100
+    duration_positive <- sum(duration_pvalues <= alpha & duration_values > 0) / length(duration_pvalues) * 100
+    duration_negative <- sum(duration_pvalues <= alpha & duration_values < 0) / length(duration_pvalues) * 100
+    duration_nonsignificant <- 100 - duration_significant
+  }
+  
+  # Calculate statistics for concentration
+  if (!is.null(concentration_slope)) {
+    concentration_values <- values(concentration_slope)
+    concentration_pvalues <- values(concentration_pvalue)
+    concentration_data <- cbind(concentration_values, concentration_pvalues)
+    concentration_data <- concentration_data[complete.cases(concentration_data), ]
+    concentration_values <- concentration_data[, 1]
+    concentration_pvalues <- concentration_data[, 2]
+    concentration_mean <- mean(concentration_values)
+    concentration_median <- median(concentration_values)
+    concentration_min <- min(concentration_values)
+    concentration_max <- max(concentration_values)
+    concentration_significant <- sum(concentration_pvalues <= alpha) / length(concentration_pvalues) * 100
+    concentration_positive <- sum(concentration_pvalues <= alpha & concentration_values > 0) / length(concentration_pvalues) * 100
+    concentration_negative <- sum(concentration_pvalues <= alpha & concentration_values < 0) / length(concentration_pvalues) * 100
+    concentration_nonsignificant <- 100 - concentration_significant
+  }
+  
+  # Print summary statistics for reporting
+  if (!is.null(persistence_slope)) {
+    persistence_summary <- data.frame(
+      Metric = c("Mean slope", "Median slope", "Minimum slope", "Maximum slope", "% Significant", "% Positive", "% Negative", "% Non-significant"),
+      Persistence = c(persistence_mean, persistence_median, persistence_min, persistence_max, persistence_significant, persistence_positive, persistence_negative, persistence_nonsignificant)
+    )
+    print(persistence_summary)
+  }
+  
+  if (!is.null(duration_slope)) {
+    duration_summary <- data.frame(
+      Metric = c("Mean slope", "Median slope", "Minimum slope", "Maximum slope", "% Significant", "% Positive", "% Negative", "% Non-significant"),
+      Duration = c(duration_mean, duration_median, duration_min, duration_max, duration_significant, duration_positive, duration_negative, duration_nonsignificant)
+    )
+    print(duration_summary)
+  }
+  
+  if (!is.null(concentration_slope)) {
+    concentration_summary <- data.frame(
+      Metric = c("Mean slope", "Median slope", "Minimum slope", "Maximum slope", "% Significant", "% Positive", "% Negative", "% Non-significant"),
+      Concentration = c(concentration_mean, concentration_median, concentration_min, concentration_max, concentration_significant, concentration_positive, concentration_negative, concentration_nonsignificant)
+    )
+    print(concentration_summary)
+  }
+  
+  # Define a color palette for trends
+  trend_colors <- colorRampPalette(c("red", "white", "blue"))
+  
+  # Set up multi-panel plotting environment
+  par(mfrow = c(2, 3), mar = c(4, 4, 2, 1))
+  
+  if (!is.null(persistence_slope)) {
+    plot(persistence_slope, col=trend_colors(100), main="Trend of Persistence Over Time", legend=TRUE)
+  }
+  
+  if (!is.null(duration_slope)) {
+    plot(duration_slope, col=trend_colors(100), main="Trend of Duration Over Time", legend=TRUE)
+  }
+  
+  if (!is.null(concentration_slope)) {
+    plot(concentration_slope, col=trend_colors(100), main="Trend of Concentration Over Time", legend=TRUE)
+  }
+  
+  # Classify the trends based on significance and directionality using ifel function
+  if (!is.null(persistence_pvalue)) {
+    persistence_significance_direction <- ifel(persistence_pvalue <= alpha & persistence_slope > 0, 1,
+                                               ifel(persistence_pvalue <= alpha & persistence_slope < 0, -1, 0))
+    plot(persistence_significance_direction, col=c("red", "white", "blue"), main="Significance and Directionality of Persistence Trends", legend=TRUE)
+  }
+  
+  if (!is.null(duration_pvalue)) {
+    duration_significance_direction <- ifel(duration_pvalue <= alpha & duration_slope > 0, 1,
+                                            ifel(duration_pvalue <= alpha & duration_slope < 0, -1, 0))
+    plot(duration_significance_direction, col=c("red", "white", "blue"), main="Significance and Directionality of Duration Trends", legend=TRUE)
+  }
+  
+  if (!is.null(concentration_pvalue)) {
+    concentration_significance_direction <- ifel(concentration_pvalue <= alpha & concentration_slope > 0, 1,
+                                                 ifel(concentration_pvalue <= alpha & concentration_slope < 0, -1, 0))
+    plot(concentration_significance_direction, col=c("red", "white", "blue"), main="Significance and Directionality of Concentration Trends", legend=TRUE)
+  }
 }
 
-# Process each chunk file sequentially
-results <- lapply(chunk_files, process_chunk)
+# Example usage
+analyze_sea_ice(start_year = 2014, end_year = 2023, use_mask = FALSE, report_metrics = c("concentration", "duration", "persistence"))
 
-# Print all results
-print(results)
 
 
 ```
+
+
+
+
+**Duration and Persistence + Trend analayis - Basic lm**
+
+
+```{r}
+# Load necessary libraries
+library(terra)
+library(dplyr)
+library(lubridate)
+library(nlme)
+library(ggplot2)
+library(grDevices)  # For colorRampPalette
+library(gridExtra)  # For arranging plots side by side
+
+# Define the function
+analyze_sea_ice <- function(start_year, end_year, use_mask = TRUE, report_metrics = c("concentration", "duration", "persistence")) {
+  
+  # Define file paths
+  chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack"
+  chunk_files <- list.files(chunk_dir, pattern = "\\.nc$", full.names = TRUE)
+  study_area_shapefile <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
+  
+  # Load the study area shapefile
+  if (use_mask) {
+    study_area <- vect(study_area_shapefile)
+  }
+  
+  # Define the threshold for sea ice concentration
+  ice_threshold <- 15
+  
+  # Function to calculate consecutive days above threshold
+  calculate_duration <- function(x, threshold) {
+    if (all(is.na(x))) return(NA)
+    rle_result <- rle(x > threshold)
+    max_duration <- ifelse(any(rle_result$values), max(rle_result$lengths[rle_result$values]), 0)
+    return(max_duration)
+  }
+  
+  # Simplified function to process each chunk file using app
+  process_chunk <- function(file_path) {
+    region_name <- gsub(".*/|\\.nc$", "", file_path)
+    message(paste("Processing file:", file_path))
+    
+    # Load the NSIDC sea ice concentration data for the subregion
+    nsidc <- rast(file_path)
+    
+    annual_persistence <- list()
+    annual_duration <- list()
+    annual_concentration <- list()
+    
+    for (year in start_year:end_year) {
+      message(paste("Processing year:", year))
+      start_date <- as.Date(paste0(year, "-01-01"))
+      end_date <- as.Date(paste0(year, "-12-31"))
+      
+      # Filter the sea ice data for the current year
+      nsidc_year <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+      
+      if (nlyr(nsidc_year) == 0) {
+        message(paste("No data for year:", year))
+        next
+      }
+      
+      # Calculate metrics based on options
+      if ("persistence" %in% report_metrics) {
+        persistence <- app(nsidc_year, function(x) sum(ifelse(x < ice_threshold, 0, 1), na.rm = FALSE))
+        names(persistence) <- paste0("Persistence_", year)
+        annual_persistence[[as.character(year)]] <- persistence
+      }
+#       
+#       # Function to calculate persistence
+# calculate_persistence <- function(x) {
+#   persistence <- sum(x > ice_threshold, na.rm = TRUE)
+#   if (all(is.na(x))) {
+#     return(NA)
+#   } else {
+#     return(persistence)
+#   }
+# }
+      
+      if ("duration" %in% report_metrics) {
+        duration <- app(nsidc_year, function(x) calculate_duration(x, ice_threshold))
+        names(duration) <- paste0("Duration_", year)
+        annual_duration[[as.character(year)]] <- duration
+      }
+      
+      if ("concentration" %in% report_metrics) {
+        concentration <- app(nsidc_year, function(x) mean(x, na.rm = TRUE))
+        names(concentration) <- paste0("Concentration_", year)
+        annual_concentration[[as.character(year)]] <- concentration
+      }
+    }
+    
+    message(paste("Finished processing file:", file_path))
+    return(list(persistence = annual_persistence, duration = annual_duration, concentration = annual_concentration))
+  }
+  
+  # Process each chunk file sequentially
+  results <- lapply(chunk_files, process_chunk)
+  
+  # Combine all annual rasters into a single stack for the selected metrics
+  combine_rasters <- function(raster_list) {
+    raster_stack <- rast()
+    for (year in names(raster_list)) {
+      if (!is.null(raster_list[[year]])) {
+        raster_stack <- c(raster_stack, raster_list[[year]])
+      }
+    }
+    return(raster_stack)
+  }
+  
+  persistence_stack <- NULL
+  duration_stack <- NULL
+  concentration_stack <- NULL
+  
+  if ("persistence" %in% report_metrics) {
+    persistence_stack <- combine_rasters(do.call(c, lapply(results, `[[`, "persistence")))
+    if (use_mask) persistence_stack <- mask(persistence_stack, study_area)
+  }
+  
+  if ("duration" %in% report_metrics) {
+    duration_stack <- combine_rasters(do.call(c, lapply(results, `[[`, "duration")))
+    if (use_mask) duration_stack <- mask(duration_stack, study_area)
+  }
+  
+  if ("concentration" %in% report_metrics) {
+    concentration_stack <- combine_rasters(do.call(c, lapply(results, `[[`, "concentration")))
+    if (use_mask) concentration_stack <- mask(concentration_stack, study_area)
+  }
+  
+  # Function to apply linear model to each pixel and return slope and p-value
+  apply_lm <- function(y) {
+    if (all(is.na(y))) {
+      return(c(NA, NA))
+    } else {
+      years <- start_year:end_year
+      fit <- tryCatch(lm(y ~ years), error = function(e) return(NULL))
+      if (is.null(fit)) {
+        return(c(NA, NA))
+      } else {
+        slope <- coef(fit)[2]  # Slope of the linear model
+        p_value <- summary(fit)$coefficients[2, 4]  # p-value for the slope
+        return(c(slope, p_value))
+      }
+    }
+  }
+  
+  persistence_trend <- NULL
+  duration_trend <- NULL
+  concentration_trend <- NULL
+  
+  if (!is.null(persistence_stack)) persistence_trend <- app(persistence_stack, apply_lm)
+  if (!is.null(duration_stack)) duration_trend <- app(duration_stack, apply_lm)
+  if (!is.null(concentration_stack)) concentration_trend <- app(concentration_stack, apply_lm)
+  
+  # Extract slopes and p-values from the results
+  persistence_slope <- NULL
+  persistence_pvalue <- NULL
+  duration_slope <- NULL
+  duration_pvalue <- NULL
+  concentration_slope <- NULL
+  concentration_pvalue <- NULL
+  
+  if (!is.null(persistence_trend)) {
+    persistence_slope <- persistence_trend[[1]]
+    persistence_pvalue <- persistence_trend[[2]]
+  }
+  
+  if (!is.null(duration_trend)) {
+    duration_slope <- duration_trend[[1]]
+    duration_pvalue <- duration_trend[[2]]
+  }
+  
+  if (!is.null(concentration_trend)) {
+    concentration_slope <- concentration_trend[[1]]
+    concentration_pvalue <- concentration_trend[[2]]
+  }
+  
+  # Verify the integrity of the data
+  if (!is.null(persistence_slope)) {
+    print("Summary of persistence slope layer:")
+    print(summary(persistence_slope))
+    print("Summary of persistence p-value layer:")
+    print(summary(persistence_pvalue))
+  }
+  
+  if (!is.null(duration_slope)) {
+    print("Summary of duration slope layer:")
+    print(summary(duration_slope))
+    print("Summary of duration p-value layer:")
+    print(summary(duration_pvalue))
+  }
+  
+  if (!is.null(concentration_slope)) {
+    print("Summary of concentration slope layer:")
+    print(summary(concentration_slope))
+    print("Summary of concentration p-value layer:")
+    print(summary(concentration_pvalue))
+  }
+  
+  # Define a significance level
+  alpha <- 0.05
+  
+  # Calculate statistics for persistence
+  if (!is.null(persistence_slope)) {
+    persistence_values <- values(persistence_slope)
+    persistence_pvalues <- values(persistence_pvalue)
+    persistence_data <- cbind(persistence_values, persistence_pvalues)
+    persistence_data <- persistence_data[complete.cases(persistence_data), ]
+    persistence_values <- persistence_data[, 1]
+    persistence_pvalues <- persistence_data[, 2]
+    persistence_mean <- mean(persistence_values)
+    persistence_median <- median(persistence_values)
+    persistence_min <- min(persistence_values)
+    persistence_max <- max(persistence_values)
+    persistence_significant <- sum(persistence_pvalues <= alpha) / length(persistence_pvalues) * 100
+    persistence_positive <- sum(persistence_pvalues <= alpha & persistence_values > 0) / length(persistence_pvalues) * 100
+    persistence_negative <- sum(persistence_pvalues <= alpha & persistence_values < 0) / length(persistence_pvalues) * 100
+    persistence_nonsignificant <- 100 - persistence_significant
+  }
+  
+  # Calculate statistics for duration
+  if (!is.null(duration_slope)) {
+    duration_values <- values(duration_slope)
+    duration_pvalues <- values(duration_pvalue)
+    duration_data <- cbind(duration_values, duration_pvalues)
+    duration_data <- duration_data[complete.cases(duration_data), ]
+    duration_values <- duration_data[, 1]
+    duration_pvalues <- duration_data[, 2]
+    duration_mean <- mean(duration_values)
+    duration_median <- median(duration_values)
+    duration_min <- min(duration_values)
+    duration_max <- max(duration_values)
+    duration_significant <- sum(duration_pvalues <= alpha) / length(duration_pvalues) * 100
+    duration_positive <- sum(duration_pvalues <= alpha & duration_values > 0) / length(duration_pvalues) * 100
+    duration_negative <- sum(duration_pvalues <= alpha & duration_values < 0) / length(duration_pvalues) * 100
+    duration_nonsignificant <- 100 - duration_significant
+  }
+  
+  # Calculate statistics for concentration
+  if (!is.null(concentration_slope)) {
+    concentration_values <- values(concentration_slope)
+    concentration_pvalues <- values(concentration_pvalue)
+    concentration_data <- cbind(concentration_values, concentration_pvalues)
+    concentration_data <- concentration_data[complete.cases(concentration_data), ]
+    concentration_values <- concentration_data[, 1]
+    concentration_pvalues <- concentration_data[, 2]
+    concentration_mean <- mean(concentration_values)
+    concentration_median <- median(concentration_values)
+    concentration_min <- min(concentration_values)
+    concentration_max <- max(concentration_values)
+    concentration_significant <- sum(concentration_pvalues <= alpha) / length(concentration_pvalues) * 100
+    concentration_positive <- sum(concentration_pvalues <= alpha & concentration_values > 0) / length(concentration_pvalues) * 100
+    concentration_negative <- sum(concentration_pvalues <= alpha & concentration_values < 0) / length(concentration_pvalues) * 100
+    concentration_nonsignificant <- 100 - concentration_significant
+  }
+  
+  # Print summary statistics for reporting
+  if (!is.null(persistence_slope)) {
+    persistence_summary <- data.frame(
+      Metric = c("Mean slope", "Median slope", "Minimum slope", "Maximum slope", "% Significant", "% Positive", "% Negative", "% Non-significant"),
+      Persistence = c(persistence_mean, persistence_median, persistence_min, persistence_max, persistence_significant, persistence_positive, persistence_negative, persistence_nonsignificant)
+    )
+    print(persistence_summary)
+  }
+  
+  if (!is.null(duration_slope)) {
+    duration_summary <- data.frame(
+      Metric = c("Mean slope", "Median slope", "Minimum slope", "Maximum slope", "% Significant", "% Positive", "% Negative", "% Non-significant"),
+      Duration = c(duration_mean, duration_median, duration_min, duration_max, duration_significant, duration_positive, duration_negative, duration_nonsignificant)
+    )
+    print(duration_summary)
+  }
+  
+  if (!is.null(concentration_slope)) {
+    concentration_summary <- data.frame(
+      Metric = c("Mean slope", "Median slope", "Minimum slope", "Maximum slope", "% Significant", "% Positive", "% Negative", "% Non-significant"),
+      Concentration = c(concentration_mean, concentration_median, concentration_min, concentration_max, concentration_significant, concentration_positive, concentration_negative, concentration_nonsignificant)
+    )
+    print(concentration_summary)
+  }
+  
+  # Define a color palette for trends
+  trend_colors <- colorRampPalette(c("red", "white", "blue"))
+  
+  # Set up multi-panel plotting environment
+  par(mfrow = c(2, 3), mar = c(4, 4, 2, 1))
+  
+  if (!is.null(persistence_slope)) {
+    plot(persistence_slope, col=trend_colors(100), main="Trend of Persistence Over Time", legend=TRUE, colNA="black")
+  }
+  
+  if (!is.null(duration_slope)) {
+    plot(duration_slope, col=trend_colors(100), main="Trend of Duration Over Time", legend=TRUE, colNA="black")
+  }
+  
+  if (!is.null(concentration_slope)) {
+    plot(concentration_slope, col=trend_colors(100), main="Trend of Concentration Over Time", legend=TRUE, colNA="black")
+  }
+  
+  # Classify the trends based on significance and directionality using ifel function
+  if (!is.null(persistence_pvalue)) {
+    significant_cells <- persistence_pvalue <= alpha
+    significant_mask <- ifel(significant_cells, 1, NA)
+    positive_trend <- ifel(significant_mask == 1 & persistence_slope > 0, 1, NA)
+    negative_trend <- ifel(significant_mask == 1 & persistence_slope < 0, 2, NA)
+    na_mask <- ifel(is.na(persistence_slope), 3, NA)
+    combined_trend <- positive_trend
+    combined_trend[!is.na(negative_trend)] <- 2
+    combined_trend[!is.na(na_mask)] <- 3
+    color_table <- data.frame(value = c(1, 2, 3), col = c("blue", "red", "black"))
+    coltab(combined_trend) <- color_table
+    plot(combined_trend, main="Significance and Directionality of Persistence Trends")
+    legend("topright", legend=c("Positive Trend", "Negative Trend", "NA Cells"), fill=color_table$col)
+  }
+  
+  if (!is.null(duration_pvalue)) {
+    significant_cells <- duration_pvalue <= alpha
+    significant_mask <- ifel(significant_cells, 1, NA)
+    positive_trend <- ifel(significant_mask == 1 & duration_slope > 0, 1, NA)
+    negative_trend <- ifel(significant_mask == 1 & duration_slope < 0, 2, NA)
+    na_mask <- ifel(is.na(duration_slope), 3, NA)
+    combined_trend <- positive_trend
+    combined_trend[!is.na(negative_trend)] <- 2
+    combined_trend[!is.na(na_mask)] <- 3
+    color_table <- data.frame(value = c(1, 2, 3), col = c("blue", "red", "black"))
+    coltab(combined_trend) <- color_table
+    plot(combined_trend, main="Significance and Directionality of Duration Trends")
+    legend("topright", legend=c("Positive Trend", "Negative Trend", "NA Cells"), fill=color_table$col)
+  }
+  
+  if (!is.null(concentration_pvalue)) {
+    significant_cells <- concentration_pvalue <= alpha
+    significant_mask <- ifel(significant_cells, 1, NA)
+    positive_trend <- ifel(significant_mask == 1 & concentration_slope > 0, 1, NA)
+    negative_trend <- ifel(significant_mask == 1 & concentration_slope < 0, 2, NA)
+    na_mask <- ifel(is.na(concentration_slope), 3, NA)
+    combined_trend <- positive_trend
+    combined_trend[!is.na(negative_trend)] <- 2
+    combined_trend[!is.na(na_mask)] <- 3
+    color_table <- data.frame(value = c(1, 2, 3), col = c("blue", "red", "black"))
+    coltab(combined_trend) <- color_table
+    plot(combined_trend, main="Significance and Directionality of Concentration Trends")
+    legend("topright", legend=c("Positive Trend", "Negative Trend", "NA Cells"), fill=color_table$col)
+  }
+}
+
+# Example usage
+analyze_sea_ice(start_year = 1987, end_year = 2023, use_mask = FALSE, report_metrics = c("concentration", "duration", "persistence"))
+
+
+
+```
+
+
+
+
+
 
 
 
@@ -1211,103 +1282,3 @@ ggplot(soi_coefficients, aes(x = factor(Month), y = estimate)) +
 
 
 
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-
-
-```{r}
-```
-
-
-
-
-
-```{r}
-```
-
-
-
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-
-
-```{r}
-```
-
-
-
-
-
-```{r}
-```
-
-
-
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-
-
-```{r}
-```
-
-
-
-
-
-```{r}
-```
-
-
-
-
-
-```{r}
-```
-
-
-```{r}
-```
-
-
-
-
-```{r}
-```
-
-
-
-
-
-```{r}
-```
-
-
-
-
-
-```{r}
-```
