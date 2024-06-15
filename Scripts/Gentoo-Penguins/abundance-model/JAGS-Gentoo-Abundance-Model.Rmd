@@ -515,7 +515,7 @@ library(terra)
 library(sf)
 library(dplyr)
 library(nlme)
-library(stringr)  # Add this line to load stringr package
+library(stringr)
 
 # Function to compute mean duration of sea ice concentration above a threshold
 compute_mean_duration <- function(buffer_path, nsidc, threshold = 15, winter_months = c(6, 7, 8, 9)) {
@@ -575,59 +575,84 @@ fit_gls_models <- function(penguin_abundance_filtered, duration_metrics) {
   return(results)
 }
 
-# Load Gentoo penguin data
-penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
-penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
-
-# Load study area shapefile
-study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
-study_area <- st_read(study_area_path)
-
-# Load the NSIDC sea ice concentration data
-nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
-
-# Filter the sea ice data from 2005 to 2023
-start_date <- as.Date("2005-01-01")
-end_date <- as.Date("2023-09-30")
-nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
-
-# Adjust the season column in the penguin abundance data
-penguin_abundance_data <- penguin_abundance_data %>%
-  mutate(year = 1970 + season - 1)
-
-# Filter penguin data to keep only consecutively censused sites and clean duplicates
-consecutively_censused <- penguin_data %>%
-  arrange(site_id, season) %>%
-  group_by(site_id) %>%
-  mutate(next_season = lead(season),
-         next_presence = lead(presence)) %>%
-  filter(presence == 1 & next_presence == 1 & season != next_season) %>%
-  ungroup() %>%
-  select(site_id, season, presence, next_season)
-
-# Merge with penguin abundance data
-penguin_abundance_filtered <- penguin_abundance_data %>%
-  left_join(consecutively_censused, by = c("site_id", "year" = "season")) %>%
-  filter(!is.na(next_season))
-
-print("Penguin abundance data after filtering for consecutively censused sites:")
-print(head(penguin_abundance_filtered)) # Debug print
-
-# Define home range directory
-home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo-home-ranges-updated/"
-home_range_files <- list.files(home_range_dir, pattern = "\\.shp$", full.names = TRUE)
-
-# Loop through each home range shapefile and compute results
-all_results <- list()
-
-for (buffer_path in home_range_files) {
-  home_range_size <- str_extract(buffer_path, "(\\d+)km")
-  duration_metrics <- compute_mean_duration(buffer_path, nsidc)
-  results <- fit_gls_models(penguin_abundance_filtered, duration_metrics)
-  all_results[[home_range_size]] <- results
+# Main analysis function
+analyze_sea_ice_effect <- function(thresholds) {
+  # Load Gentoo penguin data
+  penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
+  penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
+  
+  # Load study area shapefile
+  study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
+  study_area <- st_read(study_area_path)
+  
+  # Load the NSIDC sea ice concentration data
+  nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+  
+  # Filter the sea ice data from 2005 to 2023
+  start_date <- as.Date("1981-01-01")
+  end_date <- as.Date("2023-09-30")
+  nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+  
+  # Adjust the season column in the penguin abundance data
+  penguin_abundance_data <- penguin_abundance_data %>%
+    mutate(year = 1970 + season - 1)
+  
+  # Filter penguin data to keep only consecutively censused sites and clean duplicates
+  consecutively_censused <- penguin_data %>%
+    arrange(site_id, season) %>%
+    group_by(site_id) %>%
+    mutate(next_season = lead(season),
+           next_presence = lead(presence)) %>%
+    filter(presence == 1 & next_presence == 1 & season != next_season) %>%
+    ungroup() %>%
+    select(site_id, season, presence, next_season)
+  
+  # Merge with penguin abundance data
+  penguin_abundance_filtered <- penguin_abundance_data %>%
+    left_join(consecutively_censused, by = c("site_id", "year" = "season")) %>%
+    filter(!is.na(next_season))
+  
+  print("Penguin abundance data after filtering for consecutively censused sites:")
+  print(head(penguin_abundance_filtered)) # Debug print
+  
+  # Define home range directory
+  home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo-home-ranges-updated/"
+  home_range_files <- list.files(home_range_dir, pattern = "\\.shp$", full.names = TRUE)
+  
+  # Loop through each home range shapefile and compute results
+  all_results <- list()
+  significant_results <- list()
+  
+  for (threshold in thresholds) {
+    threshold_results <- list()
+    for (buffer_path in home_range_files) {
+      home_range_size <- str_extract(buffer_path, "(\\d+)km")
+      duration_metrics <- compute_mean_duration(buffer_path, nsidc, threshold = threshold)
+      results <- fit_gls_models(penguin_abundance_filtered, duration_metrics)
+      threshold_results[[home_range_size]] <- results
+      
+      # Check for significant instances
+      for (lag in 1:5) {
+        p_value <- results[[paste0("Lag_", lag)]]$p_value
+        if (p_value < 0.05) {
+          significant_results[[paste0("Threshold_", threshold, "_", home_range_size, "_Lag_", lag)]] <- results[[paste0("Lag_", lag)]]
+        }
+      }
+    }
+    all_results[[paste0("Threshold_", threshold)]] <- threshold_results
+  }
+  
+  return(list(all_results = all_results, significant_results = significant_results))
 }
 
-print(all_results)
+# Example usage
+thresholds <- c(15, 30, 50)  # You can change the thresholds here
+results <- analyze_sea_ice_effect(thresholds)
+print(results$all_results)
+print("Significant Results:")
+print(results$significant_results)
+
+
 
 
 ```
