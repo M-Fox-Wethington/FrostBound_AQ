@@ -210,7 +210,7 @@ ggplot(site_data, aes(x = year, y = mean_abundance)) +
 
 
 
-**Sea Ice Trend Analysis Part 2 (Home Range Analysis)**
+**Sea Ice Concentration Analysis2 (Home Range Analysis)**
 ```{r}
 # Load necessary libraries
 library(terra)
@@ -356,10 +356,14 @@ for (size in names(all_results)) {
 
 
 
-**Gentoo Sea Ice Persistence Analysis**
+**Gentoo Sea Ice Persistence (Proportion of Open Water Days) Analysis**
+
+    For each year in the study period, calculate the proportion of open water days (days with sea ice concentration below a threshold of 15%) during winter months
 
 Multi-Year Lag Effects
+
 ```{r}
+
 # Load necessary libraries
 library(terra)
 library(sf)
@@ -367,6 +371,71 @@ library(dplyr)
 library(ggplot2)
 library(lubridate)
 library(nlme)
+
+# Function to compute mean sea ice persistence for all valid years within the specified buffer
+compute_mean_persistence <- function(buffer_path, nsidc, ice_threshold = 15, winter_months = c(6, 7, 8, 9)) {
+  combined_buffers_sf <- st_read(buffer_path)
+  dissolved_buffer <- st_union(combined_buffers_sf)
+  buffer_mask <- mask(nsidc, vect(dissolved_buffer))
+  all_years <- unique(year(time(buffer_mask)))
+  
+  mean_persistence_per_year <- data.frame(year = all_years, mean_persistence = NA)
+  
+  for (year in all_years) {
+    winter_data <- subset(buffer_mask, which(year(time(buffer_mask)) == year & month(time(buffer_mask)) %in% winter_months))
+    if (nlyr(winter_data) > 0) {
+      # Calculate the proportion of open water days
+      open_water_prop <- app(winter_data, function(x) mean(x < ice_threshold, na.rm = TRUE))
+      mean_persistence <- global(open_water_prop, fun = mean, na.rm = TRUE)
+      mean_persistence_per_year$mean_persistence[mean_persistence_per_year$year == year] <- mean_persistence[1, 1]
+    }
+  }
+  
+  return(mean_persistence_per_year)
+}
+
+# Function to get precomputed mean persistence
+get_precomputed_persistence <- function(years, mean_persistence_per_year) {
+  valid_years <- years[years >= 1980 & years <= 2022]
+  if (length(valid_years) == 0) {
+    return(NA)
+  }
+  mean_persistence_values <- mean_persistence_per_year$mean_persistence[mean_persistence_per_year$year %in% valid_years]
+  if (length(mean_persistence_values) > 0) {
+    return(mean(mean_persistence_values, na.rm = TRUE))
+  } else {
+    return(NA)
+  }
+}
+
+# Function to fit GLS models and summarize results
+fit_gls_models <- function(penguin_abundance_filtered, mean_persistence_per_year) {
+  penguin_abundance_filtered <- penguin_abundance_filtered %>%
+    rowwise() %>%
+    mutate(overwinter_persistence_1yr = ifelse(year - 1 >= 1980, get_precomputed_persistence(year - 1, mean_persistence_per_year), NA),
+           overwinter_persistence_2yr = ifelse(year - 2 >= 1980, get_precomputed_persistence(c(year - 1, year - 2), mean_persistence_per_year), NA),
+           overwinter_persistence_3yr = ifelse(year - 3 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3), mean_persistence_per_year), NA),
+           overwinter_persistence_4yr = ifelse(year - 4 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3, year - 4), mean_persistence_per_year), NA),
+           overwinter_persistence_5yr = ifelse(year - 5 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3, year - 4, year - 5), mean_persistence_per_year), NA)) %>%
+    ungroup() %>%
+    filter(!is.na(overwinter_persistence_1yr) & !is.na(overwinter_persistence_2yr) & !is.na(overwinter_persistence_3yr) & !is.na(overwinter_persistence_4yr) & !is.na(overwinter_persistence_5yr))
+  
+  results <- list()
+  
+  for (lag in 1:5) {
+    formula <- as.formula(paste("growth_rate ~ overwinter_persistence_", lag, "yr", sep = ""))
+    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
+    summary_model <- summary(model)
+    results[[paste("Lag", lag)]] <- list(
+      AIC = AIC(model),
+      BIC = BIC(model),
+      coefficients = summary_model$tTable,
+      p_value = summary_model$tTable[2, 4]
+    )
+  }
+  
+  return(results)
+}
 
 # Load Gentoo penguin data
 penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
@@ -376,88 +445,14 @@ penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Resul
 study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
 study_area <- st_read(study_area_path)
 
-# Load the combined buffers shapefile
-combined_buffers_sf <- st_read("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_home-ranges/GEPG_homerange_300km.shp")
-
-# Dissolve all buffers into a single home range
-dissolved_buffer <- st_union(combined_buffers_sf)
-
 # Load the NSIDC sea ice concentration data
-nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/NSIDC_25km_Study-Area.nc")
+nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
 
 # Filter the sea ice data from 1980 to 2022
-start_date <- as.Date("1980-01-01")
-end_date <- as.Date("2022-12-31")
+start_date <- as.Date("2005-01-01")
+end_date <- as.Date("2023-09-30")
 nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
 
-# Mask the sea ice data with the dissolved buffer
-buffer_mask <- mask(nsidc, vect(dissolved_buffer))
-
-# Extract all years for processing
-all_years <- unique(year(time(buffer_mask)))
-
-# Define winter months (June-September)
-winter_months <- c(6, 7, 8, 9)
-
-# Define ice threshold
-ice_threshold <- 15
-
-# Define a function to count days with ice cover > ice_threshold for each year
-count_ice_days <- function(x) sum(ifelse(x < ice_threshold, 0, 1), na.rm = FALSE)
-
-# Initialize an empty list to store the annual ice day count rasters
-annual_ice_days <- list()
-
-# Loop over each year, subset the raster stack, and apply the counting function
-for (year in all_years) {
-  year_rasters <- subset(buffer_mask, which(year(time(buffer_mask)) == year & month(time(buffer_mask)) %in% winter_months))
-  if (nlyr(year_rasters) > 0) {
-    # Apply count_ice_days function across layers (days) at each pixel
-    ice_days_raster <- app(year_rasters, count_ice_days)  # app inherently operates cell-wise
-    names(ice_days_raster) <- paste("Ice_Days", year, sep = "_")
-    annual_ice_days[[as.character(year)]] <- ice_days_raster
-    print(paste("Processed year:", year))
-  } else {
-    print(paste("No data for year:", year))
-  }
-}
-
-# Combine the annual rasters into a single stack
-if (length(annual_ice_days) > 0) {
-  annual_ice_days_stack <- rast(annual_ice_days)
-  print("Annual ice days stack created successfully.")
-} else {
-  stop("No valid annual ice days data to create stack.")
-}
-
-# Rename layers in the stack to match the expected format
-names(annual_ice_days_stack) <- paste("Ice_Days", names(annual_ice_days_stack), sep = "_")
-
-# Check the names of the layers in the annual ice days stack
-print("Layers in annual ice days stack:")
-print(names(annual_ice_days_stack))
-
-# Calculate the proportion of open water days in winter for each year
-calculate_open_water_days <- function(annual_ice_days_stack, years) {
-  open_water_days <- sapply(years, function(y) {
-    layer_name <- paste("Ice_Days", y, sep = "_")
-    if (layer_name %in% names(annual_ice_days_stack)) {
-      ice_days_raster <- subset(annual_ice_days_stack, layer_name)
-      open_water_prop <- global(ice_days_raster, fun = function(x) mean(x < ice_threshold, na.rm = TRUE))
-      return(open_water_prop)
-    } else {
-      print(paste("Layer not found:", layer_name))
-      return(NA)
-    }
-  })
-  return(open_water_days)
-}
-
-# Ensure that open_water_days is calculated correctly
-open_water_days <- calculate_open_water_days(annual_ice_days_stack, all_years)
-
-# Convert the open water days to a data frame for analysis
-open_water_df <- data.frame(year = all_years, open_water_prop = unlist(open_water_days))
 
 # Adjust the season column in the penguin abundance data
 penguin_abundance_data <- penguin_abundance_data %>%
@@ -478,72 +473,162 @@ penguin_abundance_filtered <- penguin_abundance_data %>%
   left_join(consecutively_censused, by = c("site_id", "year" = "season")) %>%
   filter(!is.na(next_season))
 
-# Merge with open water proportion data
-penguin_abundance_filtered <- penguin_abundance_filtered %>%
-  left_join(open_water_df, by = "year")
+print("Penguin abundance data after filtering for consecutively censused sites:")
+print(head(penguin_abundance_filtered)) # Debug print
 
-# Function to calculate mean sea ice persistence for the overwinter period
-calculate_overwinter_sea_ice <- function(year, open_water_df, lag) {
-  lag_years <- year - lag
-  mean_sea_ice <- open_water_df %>%
-    filter(year %in% lag_years) %>%
-    summarise(mean(open_water_prop, na.rm = TRUE)) %>%
-    pull()
-  return(mean_sea_ice)
+# Define home range directory and sizes
+home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo-home-ranges-updated/"
+home_range_sizes <- c(25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
+# home_range_sizes <- c(50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
+
+# Loop through each home range size and compute results
+all_results <- list()
+
+for (size in home_range_sizes) {
+  buffer_path <- file.path(home_range_dir, paste0("gepe_home_ranges_", size, "km.shp"))
+  mean_persistence_per_year <- compute_mean_persistence(buffer_path, nsidc)
+  results <- fit_gls_models(penguin_abundance_filtered, mean_persistence_per_year)
+  all_results[[paste(size, "km")]] <- results
 }
 
-# Add previous season's sea ice persistence to the penguin abundance data
-penguin_abundance_filtered <- penguin_abundance_filtered %>%
-  rowwise() %>%
-  mutate(overwinter_sea_ice_1yr = calculate_overwinter_sea_ice(year, open_water_df, 1),
-         overwinter_sea_ice_2yr = calculate_overwinter_sea_ice(year, open_water_df, 1:2),
-         overwinter_sea_ice_3yr = calculate_overwinter_sea_ice(year, open_water_df, 1:3)) %>%
-  ungroup() %>%
-  filter(!is.na(overwinter_sea_ice_1yr) & !is.na(overwinter_sea_ice_2yr) & !is.na(overwinter_sea_ice_3yr))
-
-# Fit GLS models for the relationship between sea ice persistence and growth rates across all sites for each time lag
-
-# Previous 1 year
-gls_model_1yr <- gls(growth_rate ~ overwinter_sea_ice_1yr, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
-
-# Previous 2 years
-gls_model_2yr <- gls(growth_rate ~ overwinter_sea_ice_2yr, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
-
-# Previous 3 years
-gls_model_3yr <- gls(growth_rate ~ overwinter_sea_ice_3yr, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
-
-# Summarize the results
-summary(gls_model_1yr)
-summary(gls_model_2yr)
-summary(gls_model_3yr)
-
-# Visualize the relationships
-ggplot(penguin_abundance_filtered, aes(x = overwinter_sea_ice_1yr, y = growth_rate)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = TRUE) +
-  theme_minimal() +
-  labs(title = "Relationship Between Sea Ice Persistence (Lag 1 Year) and Penguin Growth Rates",
-       x = "Proportion of Open Water Days (Lag 1 Year)",
-       y = "Growth Rate")
-
-ggplot(penguin_abundance_filtered, aes(x = overwinter_sea_ice_2yr, y = growth_rate)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = TRUE) +
-  theme_minimal() +
-  labs(title = "Relationship Between Sea Ice Persistence (Lag 2 Years) and Penguin Growth Rates",
-       x = "Proportion of Open Water Days (Lag 2 Years)",
-       y = "Growth Rate")
-
-ggplot(penguin_abundance_filtered, aes(x = overwinter_sea_ice_3yr, y = growth_rate)) +
-  geom_point() +
-  geom_smooth(method = "lm", se = TRUE) +
-  theme_minimal() +
-  labs(title = "Relationship Between Sea Ice Persistence (Lag 3 Years) and Penguin Growth Rates",
-       x = "Proportion of Open Water Days (Lag 3 Years)",
-       y = "Growth Rate")
-
+# Print the results
+for (size in names(all_results)) {
+  cat("Home Range Size:", size, "\n")
+  for (lag in names(all_results[[size]])) {
+    cat(lag, "Lag:\n")
+    cat("  AIC:", all_results[[size]][[lag]]$AIC, "\n")
+    cat("  BIC:", all_results[[size]][[lag]]$BIC, "\n")
+    cat("  Coefficients:\n")
+    print(all_results[[size]][[lag]]$coefficients)
+    cat("  P-Value:", all_results[[size]][[lag]]$p_value, "\n")
+  }
+  cat("\n")
+}
 
 ```
 
+**Duration**
 
+```{r}
+# Load necessary libraries
+library(terra)
+library(sf)
+library(dplyr)
+library(nlme)
+library(stringr)  # Add this line to load stringr package
+
+# Function to compute mean duration of sea ice concentration above a threshold
+compute_mean_duration <- function(buffer_path, nsidc, threshold = 15, winter_months = c(6, 7, 8, 9)) {
+  combined_buffers_sf <- st_read(buffer_path)
+  dissolved_buffer <- st_union(combined_buffers_sf)
+  buffer_mask <- mask(nsidc, vect(dissolved_buffer))
+  all_years <- unique(year(time(buffer_mask)))
+  
+  mean_duration_results <- data.frame(year = all_years, mean_duration = NA)
+  
+  for (year in all_years) {
+    winter_data <- subset(buffer_mask, which(year(time(buffer_mask)) == year & month(time(buffer_mask)) %in% winter_months))
+    if (nlyr(winter_data) > 0) {
+      durations <- app(winter_data, function(x) {
+        rle_result <- rle(x > threshold)
+        durations <- rle_result$lengths[rle_result$values]
+        return(mean(durations, na.rm = TRUE))
+      })
+      mean_duration <- mean(values(durations), na.rm = TRUE)
+      
+      # Debugging print statements
+      print(paste("Year:", year, "Mean Duration:", mean_duration))
+      
+      mean_duration_results$mean_duration[mean_duration_results$year == year] <- mean_duration
+    }
+  }
+  
+  return(mean_duration_results)
+}
+
+# Function to fit GLS models and summarize results
+fit_gls_models <- function(penguin_abundance_filtered, duration_metrics) {
+  results <- list()
+  for (lag in 1:5) {
+    penguin_abundance_filtered <- penguin_abundance_filtered %>%
+      rowwise() %>%
+      mutate(!!paste0("overwinter_duration_", lag, "yr") := ifelse(year - lag >= 1980, duration_metrics$mean_duration[duration_metrics$year == year - lag], NA)) %>%
+      ungroup()
+  }
+  
+  for (lag in 1:5) {
+    penguin_abundance_filtered_lag <- penguin_abundance_filtered %>%
+      filter(!is.na(!!sym(paste0("overwinter_duration_", lag, "yr"))))
+    
+    formula <- as.formula(paste("growth_rate ~ overwinter_duration_", lag, "yr", sep = ""))
+    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered_lag)
+    summary_model <- summary(model)
+    
+    results[[paste("Lag", lag, sep = "_")]] <- list(
+      AIC = AIC(model),
+      BIC = BIC(model),
+      coefficients = summary_model$tTable,
+      p_value = summary_model$tTable[2, 4]
+    )
+  }
+  
+  return(results)
+}
+
+# Load Gentoo penguin data
+penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
+penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
+
+# Load study area shapefile
+study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
+study_area <- st_read(study_area_path)
+
+# Load the NSIDC sea ice concentration data
+nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+
+# Filter the sea ice data from 2005 to 2023
+start_date <- as.Date("2005-01-01")
+end_date <- as.Date("2023-09-30")
+nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+
+# Adjust the season column in the penguin abundance data
+penguin_abundance_data <- penguin_abundance_data %>%
+  mutate(year = 1970 + season - 1)
+
+# Filter penguin data to keep only consecutively censused sites and clean duplicates
+consecutively_censused <- penguin_data %>%
+  arrange(site_id, season) %>%
+  group_by(site_id) %>%
+  mutate(next_season = lead(season),
+         next_presence = lead(presence)) %>%
+  filter(presence == 1 & next_presence == 1 & season != next_season) %>%
+  ungroup() %>%
+  select(site_id, season, presence, next_season)
+
+# Merge with penguin abundance data
+penguin_abundance_filtered <- penguin_abundance_data %>%
+  left_join(consecutively_censused, by = c("site_id", "year" = "season")) %>%
+  filter(!is.na(next_season))
+
+print("Penguin abundance data after filtering for consecutively censused sites:")
+print(head(penguin_abundance_filtered)) # Debug print
+
+# Define home range directory
+home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo-home-ranges-updated/"
+home_range_files <- list.files(home_range_dir, pattern = "\\.shp$", full.names = TRUE)
+
+# Loop through each home range shapefile and compute results
+all_results <- list()
+
+for (buffer_path in home_range_files) {
+  home_range_size <- str_extract(buffer_path, "(\\d+)km")
+  duration_metrics <- compute_mean_duration(buffer_path, nsidc)
+  results <- fit_gls_models(penguin_abundance_filtered, duration_metrics)
+  all_results[[home_range_size]] <- results
+}
+
+print(all_results)
+
+
+```
 
