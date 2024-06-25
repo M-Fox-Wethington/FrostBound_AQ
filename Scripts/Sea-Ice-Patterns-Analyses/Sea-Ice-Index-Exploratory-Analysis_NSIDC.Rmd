@@ -1,0 +1,802 @@
+---
+title: "Sea Ice Index - Dataset Visualization"
+author: "Michael J. Wethington"
+date: "2024-06-21"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**Plot Continental Monthy Sea Ice Extent Trend**
+
+Plot Daily extent vs 30 years median
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Define the URL for the data
+url <- "https://noaadata.apps.nsidc.org/NOAA/G02135/south/daily/data/S_seaice_extent_daily_v3.0.csv"
+
+# Define the local file path where the data will be saved
+local_file <- "S_seaice_extent_daily_v3.0.csv"
+
+# Download the data
+download.file(url, destfile = local_file, method = "curl")
+
+# Read the data into R
+sea_ice_data <- read.csv(local_file, skip = 2, stringsAsFactors = FALSE)
+
+# Inspect the first few rows of the data
+head(sea_ice_data)
+
+# Rename columns for easier reference
+colnames(sea_ice_data) <- c("Year", "Month", "Day", "Extent", "Missing", "Source_Data")
+
+# Create a Date column
+sea_ice_data$Date <- as.Date(paste(sea_ice_data$Year, sea_ice_data$Month, sea_ice_data$Day, sep = "-"))
+
+# Filter data for the 30-year period (1981-2010)
+sea_ice_30yr <- sea_ice_data %>%
+  filter(Year >= 1981 & Year <= 2010)
+
+# Calculate the median, 10th percentile, and 90th percentile extent for each month
+monthly_stats <- sea_ice_30yr %>%
+  group_by(Month) %>%
+  summarise(
+    Median_Extent = median(Extent, na.rm = TRUE),
+    P10_Extent = quantile(Extent, 0.1, na.rm = TRUE),
+    P90_Extent = quantile(Extent, 0.9, na.rm = TRUE)
+  )
+
+# Identify the year with the record minimum extent
+record_min_year <- sea_ice_data %>%
+  group_by(Year) %>%
+  summarise(Annual_Min_Extent = min(Extent, na.rm = TRUE)) %>%
+  arrange(Annual_Min_Extent) %>%
+  slice(1) %>%
+  pull(Year)
+
+# Extract the daily extents for the record minimum year
+record_min_data <- sea_ice_data %>%
+  filter(Year == record_min_year) %>%
+  group_by(Month) %>%
+  summarise(Record_Min_Extent = mean(Extent, na.rm = TRUE))
+
+# Plot the monthly sea ice extent with the median, interdecile range, and the record minimum year
+ggplot() +
+  geom_ribbon(data = monthly_stats, aes(x = Month, ymin = P10_Extent, ymax = P90_Extent), fill = "#F2C49B", alpha = 0.5) +
+  geom_smooth(data = monthly_stats, aes(x = Month, y = Median_Extent, color = "1981-2010 Median"), method = "loess", se = FALSE, size = 1) +
+  geom_smooth(data = record_min_data, aes(x = Month, y = Record_Min_Extent, color = "Record Minimum Year"), method = "loess", se = FALSE, size = 1.5, linetype = "dotted") +
+  scale_x_continuous(breaks = 1:12, labels = month.abb) +
+  labs(
+    title = "Monthly Antarctic Sea Ice Extent",
+    # subtitle = "Comparing 1981-2010 Median, Interdecile Range, and Record Minimum Year",
+    x = "Month",
+    y = "Sea Ice Extent (million square km)"
+  ) +
+  scale_color_manual(
+    name = "Legend",
+    values = c("1981-2010 Median" = "#5983D9", "Record Minimum Year" = "#BF5630")
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16, color = "#402E24"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "#402E24"),
+    axis.title = element_text(face = "bold", color = "#402E24"),
+    axis.text = element_text(size = 12, color = "#402E24"),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12, color = "#402E24")
+  )
+
+
+
+```
+
+
+**Plot Continent-wide Month-wise Extent Anomolie Trends**
+
+To calculate and plot the anomaly, you need to subtract the overall median extent from the daily extents. This will give you the daily anomalies relative to the 30-year median extent.
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+
+# Define the URL for the data
+url <- "https://noaadata.apps.nsidc.org/NOAA/G02135/south/daily/data/S_seaice_extent_daily_v3.0.csv"
+
+# Define the local file path where the data will be saved
+local_file <- "S_seaice_extent_daily_v3.0.csv"
+
+# Download the data
+download.file(url, destfile = local_file, method = "curl")
+
+# Read the data into R
+sea_ice_data <- read.csv(local_file, skip = 2, stringsAsFactors = FALSE)
+
+# Inspect the first few rows of the data
+head(sea_ice_data)
+
+# Rename columns for easier reference
+colnames(sea_ice_data) <- c("Year", "Month", "Day", "Extent", "Missing", "Source_Data")
+
+# Filter data for the 30-year period (1981-2010)
+sea_ice_30yr <- sea_ice_data %>%
+  filter(Year >= 1981 & Year <= 2010)
+
+# Calculate the monthly median extent for each month
+monthly_medians <- sea_ice_30yr %>%
+  group_by(Month) %>%
+  summarise(Median_Extent = median(Extent, na.rm = TRUE))
+
+# Calculate anomalies relative to the 1981-2010 median for each month
+sea_ice_data <- sea_ice_data %>%
+  left_join(monthly_medians, by = "Month") %>%
+  mutate(Anomaly = ((Extent - Median_Extent) / Median_Extent) * 100)
+
+# Filter data for the months June to September
+sea_ice_winter <- sea_ice_data %>%
+  filter(Month %in% 6:9)
+
+# Convert the Month to a factor for better labeling
+sea_ice_winter$Month <- factor(sea_ice_winter$Month, levels = 6:9, labels = c("June", "July", "August", "September"))
+
+# Calculate annual average anomaly for each month
+annual_avg_anomaly <- sea_ice_winter %>%
+  group_by(Year, Month) %>%
+  summarise(Average_Anomaly = mean(Anomaly, na.rm = TRUE))
+
+# Plot the annual average anomalies with lines for June to September
+ggplot(data = annual_avg_anomaly, aes(x = Year, y = Average_Anomaly, color = Month, group = Month)) +
+  geom_line(size = 1) +  # Add lines
+  geom_point(size = 2) +  # Add points
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  facet_wrap(~ Month, nrow = 2, scales = "free_y") +
+  labs(
+    title = "Southern Hemisphere Extent Anomalies",
+    subtitle = "Annual Average Percentage Anomalies for June to September (1981-2010 median at 0%)",
+    x = "Year",
+    y = "Average Anomaly (%)",
+    color = "Month"
+  ) +
+  scale_color_manual(
+    values = c("June" = "#1f78b4", "July" = "#33a02c", "August" = "#e31a1c", "September" = "#ff7f00")
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "#333333"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "#333333"),
+    axis.title = element_text(face = "bold", size = 14, color = "#333333"),
+    axis.text = element_text(size = 12, color = "#333333"),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12, color = "#333333"),
+    panel.grid.major = element_line(color = "#e6e6e6"),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "#333333"),
+    axis.ticks = element_line(color = "#333333")
+  )
+
+
+```
+
+
+
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(zoo)
+
+# Define the URL for the data
+url <- "https://noaadata.apps.nsidc.org/NOAA/G02135/south/daily/data/S_seaice_extent_daily_v3.0.csv"
+
+# Define the local file path where the data will be saved
+local_file <- "S_seaice_extent_daily_v3.0.csv"
+
+# Download the data
+download.file(url, destfile = local_file, method = "curl")
+
+# Read the data into R
+sea_ice_data <- read.csv(local_file, skip = 2, stringsAsFactors = FALSE)
+
+# Rename columns for easier reference
+colnames(sea_ice_data) <- c("Year", "Month", "Day", "Extent", "Missing", "Source_Data")
+
+# Create a Date column
+sea_ice_data$Date <- as.Date(paste(sea_ice_data$Year, sea_ice_data$Month, sea_ice_data$Day, sep = "-"))
+
+# Filter data for the 30-year period (1981-2010)
+sea_ice_30yr <- sea_ice_data %>%
+  filter(Year >= 1981 & Year <= 2010)
+
+# Calculate the daily median extent for the baseline period (1981-2010)
+daily_medians <- sea_ice_30yr %>%
+  group_by(Month, Day) %>%
+  summarise(Median_Extent = median(Extent, na.rm = TRUE))
+
+# Join the daily medians back to the full dataset
+sea_ice_data <- sea_ice_data %>%
+  left_join(daily_medians, by = c("Month", "Day")) %>%
+  mutate(Anomaly = Extent - Median_Extent)
+
+# Apply a 5-day running mean to smooth the anomalies
+sea_ice_data <- sea_ice_data %>%
+  arrange(Date) %>%
+  mutate(Smoothed_Anomaly = rollmean(Anomaly, 5, fill = NA, align = "center"))
+
+# Filter data for the winter months (June to September)
+sea_ice_winter <- sea_ice_data %>%
+  filter(Month %in% 6:9)
+
+# Calculate annual average anomaly for each winter
+annual_winter_avg_anomaly <- sea_ice_winter %>%
+  group_by(Year) %>%
+  summarise(Annual_Winter_Average_Anomaly = mean(Smoothed_Anomaly, na.rm = TRUE))
+
+# Plot the annual winter average anomalies
+ggplot(annual_winter_avg_anomaly, aes(x = Year, y = Annual_Winter_Average_Anomaly)) +
+  geom_line(size = 0.8, color = "#1f78b4") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  labs(
+    title = "Antarctic Sea Ice Extent Anomalies",
+    subtitle = "Annual Winter (June to September) Average Anomalies from 1981-2010 Baseline",
+    x = "Year",
+    y = "Extent Anomaly (million square kilometers)",
+    caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"),
+    plot.caption = element_text(size = 10, color = "black"),
+    axis.title = element_text(face = "bold", size = 14, color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "#e6e6e6"),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+
+```
+
+
+```{r}
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(zoo)
+
+# Define the URL for the data
+url <- "https://noaadata.apps.nsidc.org/NOAA/G02135/south/daily/data/S_seaice_extent_daily_v3.0.csv"
+
+# Define the local file path where the data will be saved
+local_file <- "S_seaice_extent_daily_v3.0.csv"
+
+# Download the data
+download.file(url, destfile = local_file, method = "curl")
+
+# Read the data into R
+sea_ice_data <- read.csv(local_file, skip = 2, stringsAsFactors = FALSE)
+
+# Rename columns for easier reference
+colnames(sea_ice_data) <- c("Year", "Month", "Day", "Extent", "Missing", "Source_Data")
+
+# Create a Date column
+sea_ice_data$Date <- as.Date(paste(sea_ice_data$Year, sea_ice_data$Month, sea_ice_data$Day, sep = "-"))
+
+# Filter data for the 30-year period (1981-2010)
+sea_ice_30yr <- sea_ice_data %>%
+  filter(Year >= 1981 & Year <= 2010)
+
+# Calculate the daily median extent for the baseline period (1981-2010)
+daily_medians <- sea_ice_30yr %>%
+  group_by(Month, Day) %>%
+  summarise(Median_Extent = median(Extent, na.rm = TRUE))
+
+# Join the daily medians back to the full dataset
+sea_ice_data <- sea_ice_data %>%
+  left_join(daily_medians, by = c("Month", "Day")) %>%
+  mutate(Anomaly = Extent - Median_Extent)
+
+# Apply a 5-day running mean to smooth the anomalies
+sea_ice_data <- sea_ice_data %>%
+  arrange(Date) %>%
+  mutate(Smoothed_Anomaly = rollmean(Anomaly, 5, fill = NA, align = "center"))
+
+# Create a Month-Day column for plotting
+sea_ice_data$MonthDay <- format(sea_ice_data$Date, "%m-%d")
+sea_ice_data$MonthDay <- as.Date(sea_ice_data$MonthDay, format = "%m-%d")
+
+# Separate data for 2023
+sea_ice_2023 <- sea_ice_data %>%
+  filter(Year == 2023)
+
+# Data for other years
+sea_ice_others <- sea_ice_data %>%
+  filter(Year != 2023)
+
+# Plot the anomalies with 2023 highlighted in red and others in a gradient
+ggplot() +
+  geom_smooth(data = sea_ice_others, aes(x = MonthDay, y = Smoothed_Anomaly, group = Year, color = Year), 
+              method = "loess", se = FALSE, size = 0.8, span = 0.2, alpha = 0.7) +
+  geom_smooth(data = sea_ice_2023, aes(x = MonthDay, y = Smoothed_Anomaly), 
+              method = "loess", se = FALSE, color = "red", size = 1.2, span = 0.2) +
+  scale_color_gradient(low = "darkblue", high = "lightblue", guide = "none") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  labs(
+    title = "Antarctic Sea Ice Extent Anomalies",
+    subtitle = "Anomalies from 1981-2010 Baseline (5-day running mean)",
+    x = "Month",
+    y = "Extent Anomaly (million square kilometers)",
+    caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"),
+    plot.caption = element_text(size = 10, color = "black"),
+    axis.title = element_text(face = "bold", size = 14, color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    panel.grid.major = element_line(color = "#e6e6e6"),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+
+```
+
+
+```{r}
+
+# Load necessary libraries
+library(ggplot2)
+library(dplyr)
+library(lubridate)
+library(zoo)
+
+# Define the URL for the data
+url <- "https://noaadata.apps.nsidc.org/NOAA/G02135/south/daily/data/S_seaice_extent_daily_v3.0.csv"
+
+# Define the local file path where the data will be saved
+local_file <- "S_seaice_extent_daily_v3.0.csv"
+
+# Download the data
+download.file(url, destfile = local_file, method = "curl")
+
+# Read the data into R
+sea_ice_data <- read.csv(local_file, skip = 2, stringsAsFactors = FALSE)
+
+# Rename columns for easier reference
+colnames(sea_ice_data) <- c("Year", "Month", "Day", "Extent", "Missing", "Source_Data")
+
+# Create a Date column
+sea_ice_data$Date <- as.Date(paste(sea_ice_data$Year, sea_ice_data$Month, sea_ice_data$Day, sep = "-"))
+
+# Filter data for the 30-year period (1981-2010)
+sea_ice_30yr <- sea_ice_data %>%
+  filter(Year >= 1981 & Year <= 2010)
+
+# Calculate the daily median extent for the baseline period (1981-2010)
+daily_medians <- sea_ice_30yr %>%
+  group_by(Month, Day) %>%
+  summarise(Median_Extent = median(Extent, na.rm = TRUE))
+
+# Join the daily medians back to the full dataset
+sea_ice_data <- sea_ice_data %>%
+  left_join(daily_medians, by = c("Month", "Day")) %>%
+  mutate(Anomaly = Extent - Median_Extent)
+
+# Apply a 5-day running mean to smooth the anomalies
+sea_ice_data <- sea_ice_data %>%
+  arrange(Date) %>%
+  mutate(Smoothed_Anomaly = rollmean(Anomaly, 5, fill = NA, align = "center"))
+
+# Create a Month-Day column for plotting
+sea_ice_data$MonthDay <- format(sea_ice_data$Date, "%m-%d")
+sea_ice_data$MonthDay <- as.Date(sea_ice_data$MonthDay, format = "%m-%d")
+
+# Separate data for 2023
+sea_ice_2023 <- sea_ice_data %>%
+  filter(Year == 2023)
+
+# Data for other years
+sea_ice_others <- sea_ice_data %>%
+  filter(Year != 2023)
+
+# Plot the anomalies with 2023 highlighted in red and others in a gradient
+ggplot() +
+  geom_smooth(data = sea_ice_others, aes(x = MonthDay, y = Smoothed_Anomaly, group = Year, color = Year), 
+              method = "loess", se = FALSE, size = 0.8, span = 0.2, alpha = 0.7) +
+  geom_smooth(data = sea_ice_2023, aes(x = MonthDay, y = Smoothed_Anomaly), 
+              method = "loess", se = FALSE, color = "red", size = 1.2, span = 0.2) +
+  scale_color_gradient(low = "darkblue", high = "lightblue", guide = "none") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  labs(
+    title = "Antarctic Sea Ice Extent Anomalies",
+    subtitle = "Anomalies from 1981-2010 Baseline (5-day running mean)",
+    x = "Month",
+    y = "Extent Anomaly (million square kilometers)",
+    caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"),
+    plot.caption = element_text(size = 10, color = "black"),
+    axis.title = element_text(face = "bold", size = 14, color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    panel.grid.major = element_line(color = "#e6e6e6"),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+
+
+```
+
+
+**Sea Ice Extent Anomolies In Study Area - (a)**
+
+```{r}
+
+# Load necessary libraries
+library(terra)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(zoo)
+
+# Load the NSIDC 25 km dataset
+nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+
+# Extract dates from raster layers
+dates <- time(nsidc_25km)
+names(nsidc_25km) <- dates
+
+# Calculate the area of one cell in square meters
+cell_area_sq_meters <- prod(res(nsidc_25km))
+
+# Apply the thresholding operation across the entire dataset
+nsidc_25km_thresh <- app(nsidc_25km, fun = function(x) { x[x < 15] <- 0; return(x) })
+
+# Function to calculate sea ice extent for a given raster layer
+calculate_layer_stats <- function(layer, date, cell_area_sq_meters) {
+  # Calculate sea ice extent: count cells >= 15
+  valid_ice_cells <- global(layer, fun = function(x) sum(x >= 15, na.rm = TRUE))
+  total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6  # Convert total ice area to square kilometers
+  
+  return(data.frame(ice_extent_km = total_ice_area_sq_km, date = date))
+}
+
+
+# Calculate sea ice extent for each layer
+sea_ice_stats <- lapply(1:nlyr(nsidc_25km_thresh), function(i) {
+  calculate_layer_stats(nsidc_25km_thresh[[i]], dates[i], cell_area_sq_meters)
+})
+
+# Convert list to data frame
+sea_ice_stats_df <- do.call(rbind, sea_ice_stats)
+sea_ice_stats_df <- sea_ice_stats_df %>%
+  mutate(Date = as.Date(date), Year = year(Date), Month = month(Date, label = TRUE, abbr = TRUE))
+
+# Rename the column to ice_extent_km
+sea_ice_stats_df <- sea_ice_stats_df %>%
+  rename(ice_extent_km = global)
+
+
+
+# Define the baseline period
+baseline_start <- as.Date("1981-01-01")
+baseline_end <- as.Date("2010-12-31")
+
+# Extract baseline period data
+baseline_stats <- sea_ice_stats_df %>%
+  filter(Date >= baseline_start & Date <= baseline_end)
+
+# Calculate daily median extent for the baseline period
+baseline_median <- baseline_stats %>%
+  group_by(format(Date, "%m-%d")) %>%
+  summarise(Median_Extent = median(ice_extent_km, na.rm = TRUE)) %>%
+  ungroup()
+
+# Join baseline medians back to the full dataset
+sea_ice_stats_df <- sea_ice_stats_df %>%
+  mutate(MonthDay = format(Date, "%m-%d")) %>%
+  left_join(baseline_median, by = c("MonthDay" = "format(Date, \"%m-%d\")")) %>%
+  mutate(Anomaly = ice_extent_km - Median_Extent)
+
+# Apply a 5-day running mean to smooth the anomalies
+sea_ice_stats_df <- sea_ice_stats_df %>%
+  arrange(Date) %>%
+  group_by(Year) %>%
+  mutate(Smoothed_Anomaly = rollmean(Anomaly, 5, fill = NA, align = "center")) %>%
+  ungroup()
+
+
+
+
+
+# Separate data for 2023
+anomalies_2023 <- sea_ice_stats_df %>% filter(Year == 2023)
+anomalies_others <- sea_ice_stats_df %>% filter(Year != 2023)
+
+# Plot the anomalies with 2023 highlighted in red and others in a gradient
+ggplot() +
+  geom_line(data = anomalies_others, aes(x = as.Date(MonthDay, format = "%m-%d"), y = Smoothed_Anomaly, group = Year, color = as.numeric(Year)), size = 0.8, alpha = 0.7) +
+  geom_line(data = anomalies_2023, aes(x = as.Date(MonthDay, format = "%m-%d"), y = Smoothed_Anomaly), color = "red", size = 1.2) +
+  scale_color_gradient(low = "darkblue", high = "lightblue", guide = "none") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  labs(
+    title = "Antarctic Sea Ice Extent Anomalies",
+    subtitle = "Anomalies from 1981-2010 Baseline (5-day running mean)",
+    x = "Month",
+    y = "Extent Anomaly (million square kilometers)",
+    caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline",
+    color = "Year"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"),
+    plot.caption = element_text(size = 10, color = "black"),
+    axis.title = element_text(face = "bold", size = 14, color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    legend.position = "bottom",
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    panel.grid.major = element_line(color = "#e6e6e6"),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+
+```
+
+
+**Monthly Extent Anamolies**
+```{r}
+
+# Filter data for the months June to September
+sea_ice_winter <- sea_ice_stats_df %>%
+  filter(Month %in% c("Jun", "Jul", "Aug", "Sep"))
+
+# Convert the Month to a factor for better labeling
+sea_ice_winter$Month <- factor(sea_ice_winter$Month, levels = c("Jun", "Jul", "Aug", "Sep"), labels = c("June", "July", "August", "September"))
+
+
+# Calculate annual average anomaly for each month
+annual_avg_anomaly <- sea_ice_winter %>%
+  group_by(Year, Month) %>%
+  summarise(Average_Anomaly = mean(Anomaly, na.rm = TRUE))
+
+# Plot the annual average anomalies with lines for June to September
+ggplot(data = annual_avg_anomaly, aes(x = Year, y = Average_Anomaly, color = Month, group = Month)) +
+  geom_line(size = 1) +  # Add lines
+  geom_point(size = 2) +  # Add points
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  facet_wrap(~ Month, nrow = 2, scales = "free_y") +
+  labs(
+    title = "Antarctic Peninsula Extent Anomalies",
+    subtitle = "Annual Average Percentage Anomalies for June to September (1981-2010 median at 0%)",
+    x = "Year",
+    y = "Average Anomaly (%)",
+    color = "Month"
+  ) +
+  scale_color_manual(
+    values = c("June" = "#1f78b4", "July" = "#33a02c", "August" = "#e31a1c", "September" = "#ff7f00")
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "#333333"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "#333333"),
+    axis.title = element_text(face = "bold", size = 14, color = "#333333"),
+    axis.text = element_text(size = 12, color = "#333333"),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.text = element_text(size = 12, color = "#333333"),
+    panel.grid.major = element_line(color = "#e6e6e6"),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "#333333"),
+    axis.ticks = element_line(color = "#333333")
+  )
+
+
+```
+
+**Consolidated Winter Extent Anomolies**
+```{r}
+# Filter data for the winter months (June to September)
+sea_ice_winter <- sea_ice_stats_df %>%
+  filter(Month %in% c("Jun", "Jul", "Aug", "Sep"))
+
+
+# Calculate annual average anomaly for each winter
+annual_winter_avg_anomaly <- sea_ice_winter %>%
+  group_by(Year) %>%
+  summarise(Annual_Winter_Average_Anomaly = mean(Smoothed_Anomaly, na.rm = TRUE))
+
+
+# Plot the annual winter average anomalies
+ggplot(annual_winter_avg_anomaly, aes(x = Year, y = Annual_Winter_Average_Anomaly)) +
+  geom_line(size = 0.8, color = "#1f78b4") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  labs(
+    title = "Antarctic Peninsula Sea Ice Extent Anomalies",
+    subtitle = "Annual Winter (June to September) Average Anomalies",
+    x = "Year",
+    y = "Extent Anomaly (million square kilometers)",
+    caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"),
+    plot.caption = element_text(size = 10, color = "black"),
+    axis.title = element_text(face = "bold", size = 14, color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "#e6e6e6"),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+
+
+```
+
+
+**Subregion Trends**
+```{r}
+
+library(terra)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(zoo)
+
+# Load the NSIDC 25 km dataset
+nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+
+# Load the study area shapefile
+study_area <- vect("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp")
+
+# Subset the raster data using the study area shapefile
+nsidc_25km_subset <- crop(nsidc_25km, study_area)
+nsidc_25km_masked <- mask(nsidc_25km_subset, study_area)
+
+# Apply the thresholding operation across the entire dataset
+nsidc_25km_thresh <- app(nsidc_25km_masked, fun = function(x) { x[x < 15] <- 0; return(x) })
+
+# Reassign the time attribute manually after thresholding
+dates <- time(nsidc_25km_masked)
+
+# Apply the thresholding operation across the entire dataset
+nsidc_25km_thresh <- app(nsidc_25km_masked, fun = function(x) { x[x < 15] <- 0; return(x) })
+
+# Function to calculate sea ice extent for a given raster layer
+calculate_layer_stats <- function(layer, date, cell_area_sq_meters) {
+  # Calculate sea ice extent: count cells >= 15
+  valid_ice_cells <- global(layer, fun = function(x) sum(x >= 15, na.rm = TRUE))
+  total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6  # Convert total ice area to square kilometers
+  
+  return(data.frame(ice_extent_km = total_ice_area_sq_km, date = date))
+}
+
+# Calculate sea ice extent for each layer
+cell_area_sq_meters <- prod(res(nsidc_25km_thresh))
+sea_ice_stats <- lapply(1:nlyr(nsidc_25km_thresh), function(i) {
+  calculate_layer_stats(nsidc_25km_thresh[[i]], dates[i], cell_area_sq_meters)
+})
+
+
+# Convert list to data frame
+sea_ice_stats_df <- do.call(rbind, sea_ice_stats)
+sea_ice_stats_df <- sea_ice_stats_df %>%
+  mutate(Date = as.Date(date), Year = year(Date), Month = month(Date, label = TRUE, abbr = TRUE))
+
+# Rename the column to ice_extent_km
+sea_ice_stats_df <- sea_ice_stats_df %>%
+  rename(ice_extent_km = global)
+
+# Define the baseline period
+baseline_start <- as.Date("1981-01-01")
+baseline_end <- as.Date("2010-12-31")
+
+# Extract baseline period data
+baseline_stats <- sea_ice_stats_df %>%
+  filter(Date >= baseline_start & Date <= baseline_end)
+
+# Calculate daily median extent for the baseline period
+baseline_median <- baseline_stats %>%
+  group_by(format(Date, "%m-%d")) %>%
+  summarise(Median_Extent = median(ice_extent_km, na.rm = TRUE)) %>%
+  ungroup()
+
+# Join baseline medians back to the full dataset and calculate anomalies
+sea_ice_stats_df <- sea_ice_stats_df %>%
+  mutate(MonthDay = format(Date, "%m-%d")) %>%
+  left_join(baseline_median, by = c("MonthDay" = "format(Date, \"%m-%d\")")) %>%
+  mutate(Anomaly = ice_extent_km - Median_Extent)
+
+# Apply a 5-day running mean to smooth the anomalies
+sea_ice_stats_df <- sea_ice_stats_df %>%
+  arrange(Date) %>%
+  group_by(Year) %>%
+  mutate(Smoothed_Anomaly = rollmean(Anomaly, 5, fill = NA, align = "center")) %>%
+  ungroup()
+
+# Filter data for the winter months (June to September)
+sea_ice_winter <- sea_ice_stats_df %>%
+  filter(Month %in% c("Jun", "Jul", "Aug", "Sep"))
+
+# Calculate annual average anomaly for each winter
+annual_winter_avg_anomaly <- sea_ice_winter %>%
+  group_by(Year) %>%
+  summarise(Annual_Winter_Average_Anomaly = mean(Smoothed_Anomaly, na.rm = TRUE))
+
+# Calculate the median anomaly for the baseline period (1981-2010)
+baseline_median <- annual_winter_avg_anomaly %>%
+  filter(Year >= 1981 & Year <= 2010) %>%
+  summarise(Median_Anomaly = median(Annual_Winter_Average_Anomaly, na.rm = TRUE)) %>%
+  pull(Median_Anomaly)
+
+
+# Plot the annual winter average anomalies and the median line
+ggplot(annual_winter_avg_anomaly, aes(x = Year, y = Annual_Winter_Average_Anomaly)) +
+  geom_line(size = 0.8, color = "#1f78b4") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+  geom_hline(yintercept = baseline_median, linetype = "solid", color = "red", size = 0.8) +
+  labs(
+    title = "Antarctic Peninsula Sea Ice Extent Anomalies",
+    subtitle = "Annual Winter (June to September) Average Anomalies",
+    x = "Year",
+    y = "Extent Anomaly (million square kilometers)",
+    caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline"
+  ) +
+  theme_minimal(base_size = 15) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
+    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"),
+    plot.caption = element_text(size = 10, color = "black"),
+    axis.title = element_text(face = "bold", size = 14, color = "black"),
+    axis.text = element_text(size = 12, color = "black"),
+    legend.position = "none",
+    panel.grid.major = element_line(color = "#e6e6e6"),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(color = "black"),
+    axis.ticks = element_line(color = "black")
+  )
+
+
+
+
+```
