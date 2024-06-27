@@ -15,20 +15,46 @@ ext_nsidc <- ext(nsidc_25km)
 print(ext_amsr)
 print(ext_nsidc)
 
-# Define the manual overlapping extent
-manual_overlap_extent <- ext(
-  max(ext_amsr$xmin, ext_nsidc$xmin),
-  min(ext_amsr$xmax, ext_nsidc$xmax),
-  max(ext_amsr$ymin, ext_nsidc$ymin),
-  min(ext_amsr$ymax, ext_nsidc$ymax)
+# Check origins
+origin_amsr <- origin(amsr_12km)
+origin_nsidc <- origin(nsidc_25km)
+
+print(origin_amsr)
+print(origin_nsidc)
+
+# Align the origin of the NSIDC raster to match the AMSR raster
+nsidc_aligned <- shift(nsidc_25km, dx = origin_amsr[1] - origin_nsidc[1], dy = origin_amsr[2] - origin_nsidc[2])
+
+# Verify origins again
+origin_nsidc_aligned <- origin(nsidc_aligned)
+print(origin_nsidc_aligned)
+
+# Manually define the intersecting extent with ymin rounded down to 174999
+intersection_extent <- ext(
+  max(ext_amsr$xmin, ext(nsidc_aligned)$xmin),
+  min(ext_amsr$xmax, ext(nsidc_aligned)$xmax),
+  174999,
+  min(ext_amsr$ymax, ext(nsidc_aligned)$ymax)
 )
 
-# Crop both datasets to the manual overlapping extent
-amsr_cropped <- crop(amsr_12km, manual_overlap_extent)
-nsidc_cropped <- crop(nsidc_25km, manual_overlap_extent)
+print(intersection_extent)
+
+# Crop both datasets to the intersecting extent
+amsr_cropped <- crop(amsr_12km, intersection_extent)
+nsidc_cropped <- crop(nsidc_aligned, intersection_extent)
+
+# Ensure the cropped extents are the same by aligning extents precisely
+ext_amsr_cropped <- ext(amsr_cropped)
+ext_nsidc_cropped <- ext(nsidc_cropped)
+
+print(ext_amsr_cropped)
+print(ext_nsidc_cropped)
+
 
 # Resample the cropped NSIDC dataset to 12.5 km resolution to match the AMSR dataset using bilinear interpolation
 nsidc_resampled_to_12_5km <- resample(nsidc_cropped, amsr_cropped, method = "bilinear")
+
+
 
 # Normalize raster values to a 0-1 range
 normalize_raster <- function(r) {
@@ -78,6 +104,16 @@ harmonize_nsidc_layer <- function(layer_index) {
   harmonized_layer <- (nsidc_layer - mean_nsidc) * (sd_amsr / sd_nsidc) + mean_amsr
   harmonized_layer[na_mask] <- NA
   
+  # Preserve NA values
+  harmonized_layer[is.na(nsidc_layer)] <- NA
+  
+  # Apply the zero mask
+  zero_mask <- (amsr_layer == 0) & (nsidc_layer == 0)
+  harmonized_layer[zero_mask] <- 0
+  
+  # Clamp the values to the 0-1 range
+  clamp(harmonized_layer, lower = 0, upper = 1)
+  
   # Clamp the values to the 0-1 range
   clamped_layer <- clamp(harmonized_layer, lower = 0, upper = 1)
   
@@ -90,46 +126,35 @@ harmonized_nsidc_layers <- lapply(1:nlyr(nsidc_overlap), harmonize_nsidc_layer)
 # Create a SpatRaster stack from the harmonized layers
 harmonized_nsidc_stack <- rast(harmonized_nsidc_layers)
 
-# Set the time dimension for the harmonized NSIDC stack
-time(harmonized_nsidc_stack) <- common_dates
+# Assign common dates as names of the layers in the harmonized NSIDC stack
+names(harmonized_nsidc_stack) <- as.character(common_dates)
+
+
+# # Set the time dimension for the harmonized NSIDC stack
+# time(harmonized_nsidc_stack) <- common_dates
 
 # Print the extent and resolution of the harmonized NSIDC stack
 print(ext(harmonized_nsidc_stack))
 print(res(harmonized_nsidc_stack))
 
-# Plot a random sample of layers from the original and harmonized datasets
-set.seed(123) # For reproducibility
-sample_indices <- sample(1:length(common_dates), 10)
+# Output the harmonized raster stack to the specified directory
+output_filepath <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/linear-transformation/harmonized_nsidc_stack.tif"
+writeRaster(harmonized_nsidc_stack, filename = output_filepath, overwrite = TRUE)
 
-plot_layers_side_by_side <- function(index) {
-  par(mfrow = c(3, 1))
-  
-  # Plot AMSR layer and its summary
-  hist(values(amsr_overlap[[index]]), main = paste("Histogram of AMSR Layer for", common_dates[index]), xlab = "Value", breaks = 50, col = "blue")
-  summary_amsr <- summary(amsr_overlap[[index]])
-  print(paste("Summary of AMSR Layer for", common_dates[index]))
-  print(summary_amsr)
-  
-  # Plot NSIDC layer and its summary
-  hist(values(nsidc_overlap[[index]]), main = paste("Histogram of NSIDC Layer for", common_dates[index]), xlab = "Value", breaks = 50, col = "green")
-  summary_nsidc <- summary(nsidc_overlap[[index]])
-  print(paste("Summary of NSIDC Layer for", common_dates[index]))
-  print(summary_nsidc)
-  
-  # Plot Harmonized NSIDC layer and its summary
-  hist(values(harmonized_nsidc_stack[[index]]), main = paste("Histogram of Harmonized NSIDC Layer for", common_dates[index]), xlab = "Value", breaks = 50, col = "red")
-  summary_harmonized <- summary(harmonized_nsidc_stack[[index]])
-  print(paste("Summary of Harmonized NSIDC Layer for", common_dates[index]))
-  print(summary_harmonized)
-  
-  # Plot the layers side by side for comparison
-  par(mfrow = c(1, 3))
-  plot(amsr_overlap[[index]], main = paste("AMSR Layer for", common_dates[index]))
-  plot(nsidc_overlap[[index]], main = paste("NSIDC Layer for", common_dates[index]))
-  plot(harmonized_nsidc_stack[[index]], main = paste("Harmonized NSIDC Layer for", common_dates[index]))
-  plot(is.na(harmonized_nsidc_stack[[index]]), col = c(NA, "red"), add = TRUE, legend = FALSE)
-}
+# Print confirmation message
+print(paste("Harmonized raster stack saved to:", output_filepath))
 
-for (i in sample_indices) {
-  plot_layers_side_by_side(i)
-}
+
+
+# Extract the raster layer
+raster_layer <- harmonized_nsidc_stack[[10]]
+
+# Plot the raster layer with a default color palette
+plot(raster_layer, col = terrain.colors(100), legend = TRUE)
+
+# Create a mask for NA values
+na_mask <- is.na(raster_layer)
+
+# Overlay the NA values in red
+plot(na_mask, col = c(NA, "red"), add = TRUE, legend = FALSE)
+
