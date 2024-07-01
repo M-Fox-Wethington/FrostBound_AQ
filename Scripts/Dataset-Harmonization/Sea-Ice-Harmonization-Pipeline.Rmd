@@ -7,7 +7,7 @@ output: html_document
 
 # Introduction
 
-This tutorial demonstrates how to harmonize two different raster datasets, apply a linear regression model to predict values, and visualize the results using the `terra` package in R. The example uses sea ice concentration data from two sources: AMSR-Unified 12.5 km and NSIDC 25 km.
+This tutorial demonstrates how to harmonize two different raster datasets, apply an Artificial Neural Network (ANN) model to predict values, and visualize the results using the `terra`, `nnet`, and `tidymodels` packages in R. The example uses sea ice concentration data from two sources: AMSR-Unified 12.5 km and NSIDC 25 km.
 
 ## Overview and Objective
 
@@ -20,25 +20,38 @@ The primary objective of this script is to harmonize and compare sea ice concent
 5. **Resample NSIDC Dataset**: Resample the NSIDC dataset to match the 12.5 km resolution of the AMSR dataset using bilinear interpolation.
 6. **Normalize Raster Values**: Normalize the values of both datasets to a 0-1 range for consistent analysis.
 7. **Extract Common Dates and Subset Data**: Identify common dates between the two datasets and subset the data to these overlapping periods.
-8. **Build Linear Regression Model**: Construct a linear regression model to analyze the relationship between the AMSR and NSIDC datasets.
-9. **Apply Linear Model to Raster Stack**: Apply the linear regression model to predict values in the raster stack and adjust the predicted values.
+8. **Build and Train ANN Model**: Construct and train an ANN model to analyze the relationship between the AMSR and NSIDC datasets, tuning hyperparameters using grid search.
+9. **Apply ANN Model to Raster Stack**: Apply the trained ANN model to predict values in the raster stack, ensuring predictions are clamped between 0 and 1.
 10. **Visualize Results**: Plot the original and processed raster layers side by side to visually assess the results.
-
-By following these steps, the script aims to harmonize the datasets spatially and temporally, normalize their values, and then use a linear regression model to compare and predict sea ice concentration values. This approach facilitates a detailed comparison and analysis of sea ice concentration estimates from different sources, which can be critical for ecological and environmental studies.
-
+11. **Model Assessment Using `tidymodels`**: Evaluate the performance of the ANN model using the `tidymodels` package.
 
 
+```{r}
 
+# Load necessary libraries
+if (!require(terra)) install.packages('terra')
+if (!require(dplyr)) install.packages('dplyr')
+if (!require(reshape2)) install.packages('reshape2')
+if (!require(tidyr)) install.packages('tidyr')
+if (!require(nnet)) install.packages('nnet')
+if (!require(tidymodels)) install.packages('tidymodels')
 
-## Dataset Normalization and Alignment
-
-
-
-```{r include=FALSE}
 library(terra)
 library(dplyr)
 library(reshape2)
 library(tidyr)
+library(nnet)
+library(foreach)
+library(doParallel)
+library(yardstick)
+
+```
+
+
+## Train/TestDataset Normalization and Alignment
+
+
+```{r include=FALSE}
 
 # Function to normalize raster values to a 0-1 range
 normalize_raster <- function(r) {
@@ -228,24 +241,9 @@ range(normalized_sea_ice_concentration_df_clean_loaded$nsidc)
 
 ```
 
-**NNET - ANN Hyperparameter Tuning**
+**ANN Hyperparameter Tuning (nnet)**
 
 ```{r}
-
-
-# Load necessary libraries
-if (!require(terra)) install.packages('terra')
-if (!require(dplyr)) install.packages('dplyr')
-if (!require(reshape2)) install.packages('reshape2')
-if (!require(tidyr)) install.packages('tidyr')
-if (!require(nnet)) install.packages('nnet')
-library(terra)
-library(dplyr)
-library(reshape2)
-library(tidyr)
-library(nnet)
-library(foreach)
-library(doParallel)
 
 
 # Set the output directory
@@ -301,7 +299,6 @@ best_params <- grid_search_results[which.min(grid_search_results$mse), ]
 cat("Best hyperparameters: size =", best_params$size, "decay =", best_params$decay, "with MSE =", best_params$mse, "\n")
 
 
-
 # Set the output directory
 output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization"
 
@@ -320,14 +317,10 @@ cat("Best hyperparameters and tuning results saved.\n")
 
 ```{r}
 
-library(terra)
-library(nnet)
 
 # Load the prepared dataset
 cat("Loading the prepared dataset...\n")
 normalized_sea_ice_concentration_df_clean <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/normalized_sea_ice_concentration_df_clean.rds")
-
-str(normalized_sea_ice_concentration_df_clean)
 
 # Load the saved raster stack
 cat("Loading the NSIDC resampled raster stack...\n")
@@ -351,57 +344,104 @@ cat("Saving the final ANN model...\n")
 saveRDS(ann_model, file = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/final_ann_model_1500-iterations.rds")
 cat("Final ANN model saved.\n")
 
-# Predict on the test set and evaluate the final ANN model
-cat("Predicting on the test set with the final ANN model...\n")
-start_time <- Sys.time()
-ann_pred <- predict(ann_model, newdata = test_data)
-end_time <- Sys.time()
-cat("Prediction with the final ANN model completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
-
-ann_mse <- mean((test_data$amsr - ann_pred)^2)
-cat("Final ANN Model MSE:", ann_mse, "\n")
 ```
 
 
-
+##Deploy ANN across the Alligned NSIDC Stack (1979-2023)
 
 **Deploy the ANN**
 
 ```{r}
+
 # Load the necessary libraries
 library(terra)
 library(nnet)
+library(dplyr)
+library(yardstick)
 
 # Load the trained ANN model
 cat("Loading the trained ANN model...\n")
-ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/final_ann_model_1500-iterations.rds")
+ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/final_ann_model_1500-iterations.rds")
 
 # Load the NSIDC raster stack
+cat("Loading the NSIDC raster stack...\n")
 nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif")
 
 # Load the AMSR raster stack
+cat("Loading the AMSR raster stack...\n")
 amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif")
 
+# Extract the date information from the raster metadata
+nsidc_dates <- as.Date(time(nsidc_stack), origin = "1970-01-01")
 
-# Extract the first layer of the NSIDC raster stack
-nsidc_first_layer <- nsidc_stack[[1]]
+# Define the prediction function
+predict_harmonized_values <- function(x) {
+  df_input <- data.frame(nsidc = x)
+  predicted_values <- predict(ann_model, df_input)
+  return(predicted_values)
+}
 
-# Create a mask of NA cells (land cells) from the first layer of the NSIDC raster
-na_mask <- is.na(nsidc_first_layer)
+# Apply the ANN model to the NSIDC stack
+cat("Applying the ANN model to the NSIDC layers...\n")
+harmonized_stack <- app(nsidc_stack, predict_harmonized_values)
 
-# Apply this mask to the first layer of the AMSR raster stack
-amsr_first_layer <- amsr_stack[[1]]
-amsr_masked <- mask(amsr_first_layer, na_mask, maskvalue = 1, updatevalue = NA)
+# Set values above 1 to 1
+harmonized_stack <- ifel(harmonized_stack > 1, 1, harmonized_stack)
 
-terra:plot(amsr_masked)
+# Assign the original dates to the harmonized stack
+names(harmonized_stack) <- nsidc_dates
 
-terra::plot(na_mask)
+# Plot the first layer for verification
+par(mfrow = c(1, 2))  # Set up the plotting area to have 1 row and 2 columns
+plot(nsidc_stack[[1]], colNA = "red", main = "NSIDC 25km")
+plot(harmonized_stack[[1]], colNA = "red", main = "NSIDC 12.5 km Harmonized")
+
+# Set the output directory
+# output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset"
+# dir.create(output_dir, showWarnings = FALSE)
+
+# # Save the harmonized NSIDC raster stack
+# cat("Saving the Harmonized NSIDC raster stack...\n")
+# # writeRaster(harmonized_stack, filename = file.path(output_dir, "nsidc_12_5km_normalized_1979-2023.tif"), overwrite = TRUE)
+# cat("Harmonized NSIDC raster stack saved.\n")
+
+
+
+```
+
+## Assess Model Performance
+
+**ANN Model Assessment**
+
+```{r}
+
+# Load the necessary libraries
+library(terra)
+library(nnet)
+library(dplyr)
+library(yardstick)
+
+# Load the trained ANN model
+cat("Loading the trained ANN model...\n")
+ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/final_ann_model_1500-iterations.rds")
+
+# Load the train/test dataset
+cat("Loading the prepared dataset...\n")
+normalized_sea_ice_concentration_df_clean <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/normalized_sea_ice_concentration_df_clean.rds")
+
+# Load the NSIDC raster stack
+cat("Loading the NSIDC raster stack...\n")
+nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif")
+
+# Load the AMSR raster stack
+cat("Loading the AMSR raster stack...\n")
+amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif")
 
 # Extract the date information from the raster metadata
 nsidc_dates <- as.Date(time(nsidc_stack), origin = "1970-01-01")
 amsr_dates <- as.Date(time(amsr_stack), origin = "1970-01-01")
 
-# Assuming nsidc_dates and amsr_dates are Date arrays corresponding to each raster layer
+# Find common dates between the two datasets
 common_dates <- as.Date(intersect(nsidc_dates, amsr_dates))
 
 # Find indices for common dates in both stacks
@@ -409,101 +449,47 @@ nsidc_indices <- which(nsidc_dates %in% common_dates)
 amsr_indices <- which(amsr_dates %in% common_dates)
 
 # Subset the layers for the overlapping period
-print("Subsetting layers for the overlapping period...")
+cat("Subsetting layers for the overlapping period...\n")
 amsr_overlap <- subset(amsr_stack, amsr_indices)
 nsidc_overlap <- subset(nsidc_stack, nsidc_indices)
-
 
 # Set the layer names to the corresponding dates
-print("Setting layer names for AMSR and NSIDC overlap layers...")
+cat("Setting layer names for AMSR and NSIDC overlap layers...\n")
 names(amsr_overlap) <- common_dates
 names(nsidc_overlap) <- common_dates
 
-
-# Apply the ANN model to the harmonized NSIDC layers using the correct prediction function
-cat("Applying the ANN model to the harmonized NSIDC layers...\n")
-
-
-predict_harmonized_values <- function(x) {
-  # Ensure that the raster stack is considered as a matrix with one column per call
-  # This creates a dataframe on-the-fly, assuming each input from `app` is a single value
-  if(length(x) == 1) {
-    df_input <- data.frame(nsidc = x)  # Single value to dataframe
-  } else {
-    df_input <- data.frame(nsidc = x[,1])  # Assuming x is a matrix with cells as rows
-  }
-  predicted_values <- predict(ann_model, df_input)
-  return(predicted_values)
-}
-
-# Use the first layer for applying the model
-harmonized_stack <- app(nsidc_overlap[[1]], predict_harmonized_values, cores = 1)
-
-summary(nsidc_stack[[1]])
-summary(harmonized_stack[[1]])
-summary(amsr_overlap[[1]])
-
-par(mfrow = c(1, 3))  # Set up the plotting area to have 1 row and 3 columns
-terra::plot(nsidc_overlap[[1]], colNA = "red", main = "NSIDC 25km")
-terra::plot(harmonized_stack[[1]], colNA = "red", main = "NSIDC 12.5 km Harmonized")
-terra::plot(amsr_overlap[[1]], colNA = "red", main = "AMSR Unified 12.5 km ")
-
-
-
-```
-**ANN Model Assessment**
-
-```{r}
-library(terra)
-library(nnet)
-library(Metrics)
-
-# Load the trained ANN model
-cat("Loading the trained ANN model...\n")
-ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/final_ann_model.rds")
-
-# Load the NSIDC and AMSR raster stacks
-nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif")
-amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif")
-
-# Extract the date information from the raster metadata
-nsidc_dates <- as.Date(time(nsidc_stack), origin = "1970-01-01")
-amsr_dates <- as.Date(time(amsr_stack), origin = "1970-01-01")
-
-# Find common dates and subset the layers for the overlapping period
-common_dates <- as.Date(intersect(nsidc_dates, amsr_dates))
-nsidc_indices <- which(nsidc_dates %in% common_dates)
-
-amsr_indices <- which(amsr_dates %in% common_dates)
-amsr_overlap <- subset(amsr_stack, amsr_indices)
-nsidc_overlap <- subset(nsidc_stack, nsidc_indices)
-names(amsr_overlap) <- common_dates
-names(nsidc_overlap) <- common_dates
-
-# Define the prediction function for the ANN model
+# Define the prediction function
 predict_harmonized_values <- function(x) {
   df_input <- data.frame(nsidc = x)
   predicted_values <- predict(ann_model, df_input)
   return(predicted_values)
 }
 
-# Harmonize the entire NSIDC stack
+# Harmonize the NSIDC stack
+cat("Applying the ANN model to the NSIDC layers...\n")
 harmonized_stack <- app(nsidc_overlap, predict_harmonized_values)
 
 # Compute statistical metrics
 compute_metrics <- function(actual, predicted) {
   actual_values <- values(actual)
   predicted_values <- values(predicted)
+  # Remove NA values for accurate comparison
   valid_indices <- !is.na(actual_values) & !is.na(predicted_values)
   actual_values <- actual_values[valid_indices]
   predicted_values <- predicted_values[valid_indices]
   
-  mae <- mae(actual_values, predicted_values)
-  rmse <- rmse(actual_values, predicted_values)
+  mae <- yardstick::mae_vec(actual_values, predicted_values)
+  rmse <- yardstick::rmse_vec(actual_values, predicted_values)
   r2 <- cor(actual_values, predicted_values)^2
   
   return(list(MAE = mae, RMSE = rmse, R2 = r2))
 }
+
+# Split into training and test sets
+set.seed(123)  # For reproducibility
+train_indices <- sample(1:nrow(normalized_sea_ice_concentration_df_clean), 0.8 * nrow(normalized_sea_ice_concentration_df_clean))
+train_data <- normalized_sea_ice_concentration_df_clean[train_indices, ]
+test_data <- normalized_sea_ice_concentration_df_clean[-train_indices, ]
 
 # Apply metrics to each layer
 metrics_list <- lapply(1:nlyr(amsr_overlap), function(i) {
@@ -511,6 +497,12 @@ metrics_list <- lapply(1:nlyr(amsr_overlap), function(i) {
   predicted <- harmonized_stack[[i]]
   compute_metrics(actual, predicted)
 })
+
+# Print out metrics for each layer
+for (i in 1:length(metrics_list)) {
+  cat("Layer", i, ":\n")
+  print(metrics_list[[i]])
+}
 
 # Extract individual metric values and calculate the averages
 mae_values <- sapply(metrics_list, function(x) x$MAE)
@@ -526,288 +518,195 @@ cat("Average MAE:", average_mae, "\n")
 cat("Average RMSE:", average_rmse, "\n")
 cat("Average R2:", average_r2, "\n")
 
+# Evaluate the model using yardstick on the test dataset
+cat("Evaluating the model on the test dataset...\n")
+test_data <- test_data %>%
+  mutate(predictions = as.numeric(predict(ann_model, newdata = test_data)))
+
+mae_result <- yardstick::mae(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+rmse_result <- yardstick::rmse(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+rsq_result <- yardstick::rsq(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+smape_result <- yardstick::smape(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+mase_result <- yardstick::mase(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+ccc_result <- yardstick::ccc(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+huber_loss_result <- yardstick::huber_loss(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+rpiq_result <- yardstick::rpiq(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+rpd_result <- yardstick::rpd(test_data, truth = amsr, estimate = predictions, na_rm = TRUE)
+
+# Print yardstick metrics
+cat("Test Data Metrics:\n")
+cat("MAE:", mae_result$.estimate, "\n")
+cat("RMSE:", rmse_result$.estimate, "\n")
+cat("R2:", rsq_result$.estimate, "\n")
+cat("SMAPE:", smape_result$.estimate, "\n")
+cat("MASE:", mase_result$.estimate, "\n")
+cat("CCC:", ccc_result$.estimate, "\n")
+cat("Huber Loss:", huber_loss_result$.estimate, "\n")
+cat("RPIQ:", rpiq_result$.estimate, "\n")
+cat("RPD:", rpd_result$.estimate, "\n")
+
 # Optionally, plot the first layer of each stack for verification
 par(mfrow = c(1, 3))  # Set up the plotting area to have 1 row and 3 columns
 plot(nsidc_overlap[[1]], colNA = "red", main = "NSIDC 25km")
 plot(harmonized_stack[[1]], colNA = "red", main = "NSIDC 12.5 km Harmonized")
-plot(amsr_overlap[[1]], colNA = "red", main = "AMSR Unified 12.5 km ")
-
-# Save the harmonized stack if needed
-writeRaster(harmonized_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized_stack.tif", overwrite = TRUE)
-
-# Load the prepared dataset
-cat("Loading the prepared dataset...\n")
-normalized_sea_ice_concentration_df_clean <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/normalized_sea_ice_concentration_df_clean.rds")
-
-# Split into training and test sets
-set.seed(123)  # For reproducibility
-train_indices <- sample(1:nrow(normalized_sea_ice_concentration_df_clean), 0.8 * nrow(normalized_sea_ice_concentration_df_clean))
-train_data <- normalized_sea_ice_concentration_df_clean[train_indices, ]
-test_data <- normalized_sea_ice_concentration_df_clean[-train_indices, ]
-
-# Apply the ANN model to the test data
-test_predictions <- predict(ann_model, test_data)
-
-# Compute statistical metrics on the test data
-actual_test_values <- test_data$amsr
-predicted_test_values <- test_predictions
-
-mae_test <- mae(actual_test_values, predicted_test_values)
-rmse_test <- rmse(actual_test_values, predicted_test_values)
-r2_test <- cor(actual_test_values, predicted_test_values)^2
-
-# Print out metrics for the test data
-cat("Test Data Metrics:\n")
-cat("MAE:", mae_test, "\n")
-cat("RMSE:", rmse_test, "\n")
-cat("R2:", r2_test, "\n")
+plot(amsr_overlap[[1]], colNA = "red", main = "AMSR Unified 12.5 km")
 
 
 ```
 
 
 
+
+
+
+
+**Deploy ANN across entire NSIDC Dataset**
+
 ```{r}
-
-
-# Load necessary libraries
 library(terra)
 library(nnet)
 
 # Load the trained ANN model
-cat("Loading the final ANN model...\n")
-ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/final_ann_model_1500-iterations.rds")
+cat("Loading the trained ANN model...\n")
+ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/final_ann_model_1500-iterations.rds")
 
-# Load the saved raster stack
-cat("Loading the NSIDC resampled raster stack...\n")
-nsidc_resampled_to_12_5km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/nsidc_resampled_to_12_5km.tif")
 
-# Extract the first layer of the raster stack
-nsidc_first_layer <- nsidc_resampled_to_12_5km[[1]]
-
-# Function to apply ANN model to a single raster layer
-apply_ann_to_layer <- function(layer, ann_model) {
-  predicted_values <- predict(ann_model, newdata = data.frame(nsidc = as.vector(layer)))
-  predicted_raster <- setValues(layer, predicted_values)
-  predicted_raster <- clamp(predicted_raster, lower = 0, upper = 100)
-  return(predicted_raster)
+# Function to normalize raster values to a 0-1 range
+normalize_raster <- function(r) {
+  r_min <- global(r, min, na.rm = TRUE)[[1]]
+  r_max <- global(r, max, na.rm = TRUE)[[1]]
+  
+  if (r_min >= 0 && r_max <= 1) {
+    message("Raster values are already within the 0-1 range.")
+    return(r)
+  } else if (is.finite(r_min) && is.finite(r_max)) {
+    normalized_raster <- (r - r_min) / (r_max - r_min)
+    return(normalized_raster)
+  } else {
+    warning("Raster contains only NA values or min/max are not finite.")
+    return(r)
+  }
 }
 
-# Apply the ANN model to the first layer
-cat("Applying the final ANN model to the first raster layer...\n")
-processed_first_layer_ann <- apply_ann_to_layer(nsidc_first_layer, ann_model)
-cat("Application of the final ANN model to the first raster layer completed.\n")
+# Load the AMSR-Unified 12.5 km dataset
+print("Loading AMSR-Unified 12.5 km dataset...")
+amsr_12km <- tryCatch({
+  rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/AMSR-Unified_12km/stack/substack/AMSR_12km_Full_Study_Area.nc")
+}, error = function(e) {
+  stop("Error loading AMSR-Unified dataset: ", e)
+})
 
-# Plot the original and processed raster layers to compare
-cat("Plotting the results...\n")
-par(mfrow = c(1, 2))  # Set up the plotting area for side-by-side plots
+# Load the NSIDC 25 km dataset (full timeline from 1979 to 2024)
+print("Loading NSIDC 25 km dataset...")
+nsidc_25km <- tryCatch({
+  rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+}, error = function(e) {
+  stop("Error loading NSIDC dataset: ", e)
+})
 
-plot(nsidc_first_layer, main = "NSIDC Aligned - First Layer")
-plot(processed_first_layer_ann, main = "Processed Layer - ANN")
+# Verify extents
+print("Verifying extents...")
+ext_amsr <- ext(amsr_12km)
+ext_nsidc <- ext(nsidc_25km)
 
-# Reset the plotting area
-par(mfrow = c(1, 1))
-cat("Plotting completed.\n")
+print(ext_amsr)
+print(ext_nsidc)
 
+# Check origins
+print("Checking origins...")
+origin_amsr <- origin(amsr_12km)
+origin_nsidc <- origin(nsidc_25km)
+
+print(origin_amsr)
+print(origin_nsidc)
+
+# Align the origin of the NSIDC raster to match the AMSR raster
+print("Aligning NSIDC raster to AMSR origin...")
+nsidc_aligned <- shift(nsidc_25km, dx = origin_amsr[1] - origin_nsidc[1], dy = origin_amsr[2] - origin_nsidc[2])
+
+# Verify origins again
+print("Verifying aligned origins...")
+origin_nsidc_aligned <- origin(nsidc_aligned)
+print(origin_nsidc_aligned)
+
+# Define the intersecting extent with ymin rounded down to 174999
+print("Defining intersecting extent...")
+intersection_extent <- ext(
+  max(ext_amsr$xmin, ext(nsidc_aligned)$xmin),
+  min(ext_amsr$xmax, ext(nsidc_aligned)$xmax),
+  174999,
+  min(ext_amsr$ymax, ext(nsidc_aligned)$ymax)
+)
+
+print(intersection_extent)
+
+# Crop both datasets to the intersecting extent
+print("Cropping datasets to intersecting extent...")
+amsr_cropped <- crop(amsr_12km, intersection_extent)
+nsidc_cropped <- crop(nsidc_aligned, intersection_extent)
+
+# Verify cropped extents
+print("Verifying cropped extents...")
+ext_amsr_cropped <- ext(amsr_cropped)
+ext_nsidc_cropped <- ext(nsidc_cropped)
+
+print(ext_amsr_cropped)
+print(ext_nsidc_cropped)
+
+# Resample the cropped NSIDC dataset to 12.5 km resolution using bilinear interpolation
+print("Resampling NSIDC dataset to 12.5 km resolution...")
+nsidc_resampled_to_12_5km <- resample(nsidc_cropped, amsr_cropped, method = "bilinear")
+
+
+
+predict_harmonized_values <- function(x) {
+  # Ensure that the raster stack is considered as a matrix with one column per call
+  # This creates a dataframe on-the-fly, assuming each input from `app` is a single value
+  if(length(x) == 1) {
+    df_input <- data.frame(nsidc = x)  # Single value to dataframe
+  } else {
+    df_input <- data.frame(nsidc = x[,1])  # Assuming x is a matrix with cells as rows
+  }
+  predicted_values <- predict(ann_model, df_input)
+  return(predicted_values)
+}
+
+# Harmonize the entire NSIDC stack (assuming this is what you want)
+harmonized_stack <- app(nsidc_resampled_to_12_5km, predict_harmonized_values)
+
+plot(harmonized_stack[[2500]])
 
 ```
 
-**Load Processed Data and Train/Run Models **
-
-```{r}
-
-# Load necessary libraries
-if (!require(terra)) install.packages('terra')
-if (!require(dplyr)) install.packages('dplyr')
-if (!require(reshape2)) install.packages('reshape2')
-if (!require(tidyr)) install.packages('tidyr')
-if (!require(nnet)) install.packages('nnet')
-library(terra)
-library(dplyr)
-library(reshape2)
-library(tidyr)
-library(nnet)
-
-# Load the saved dataset
-cat("Loading the prepared dataset...\n")
-normalized_sea_ice_concentration_df_clean <- readRDS(file = file.path(output_dir, "merged_df_wide_clean.rds"))
-
-# Load the saved raster stack
-cat("Loading the NSIDC resampled raster stack...\n")
-nsidc_resampled_to_12_5km <- rast(file.path(output_dir, "nsidc_resampled_to_12_5km.tif"))
-
-# Subsample data for faster training and testing
-cat("Subsampling data...\n")
-set.seed(123) # For reproducibility
-sample_size <- 0.01 * nrow(merged_df_wide_clean)  # Use 1% of the data for quick testing
-train_indices <- sample(1:nrow(merged_df_wide_clean), sample_size)
-train_data <- merged_df_wide_clean[train_indices, ]
-test_indices <- sample(1:nrow(merged_df_wide_clean), sample_size)
-test_data <- merged_df_wide_clean[test_indices, ]
-
-# Train basic linear regression model
-cat("Training basic linear regression model...\n")
-start_time <- Sys.time()
-lm_model <- lm(amsr ~ nsidc, data = train_data)
-end_time <- Sys.time()
-cat("Linear regression training completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
-
-# Predict on the test set and evaluate linear model
-cat("Predicting on the test set with linear model...\n")
-start_time <- Sys.time()
-lm_pred <- predict(lm_model, newdata = test_data)
-end_time <- Sys.time()
-cat("Prediction with linear model completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
-
-lm_mse <- mean((test_data$amsr - lm_pred)^2)
-cat("Linear Regression Model MSE:", lm_mse, "\n")
-
-# Train polynomial regression model (degree 2)
-cat("Training polynomial regression model (degree 2)...\n")
-start_time <- Sys.time()
-poly_model <- lm(amsr ~ poly(nsidc, 2), data = train_data)
-end_time <- Sys.time()
-cat("Polynomial regression training completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
-
-# Predict on the test set and evaluate polynomial model
-cat("Predicting on the test set with polynomial model...\n")
-start_time <- Sys.time()
-poly_pred <- predict(poly_model, newdata = test_data)
-end_time <- Sys.time()
-cat("Prediction with polynomial model completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
-
-poly_mse <- mean((test_data$amsr - poly_pred)^2)
-cat("Polynomial Regression Model (Degree 2) MSE:", poly_mse, "\n")
-
-# Train an artificial neural network model
-cat("Training artificial neural network model...\n")
-start_time <- Sys.time()
-ann_model <- nnet(amsr ~ nsidc, data = train_data, size = 5, linout = TRUE, maxit = 500)
-end_time <- Sys.time()
-cat("ANN training completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
-
-# Predict on the test set and evaluate ANN model
-cat("Predicting on the test set with ANN model...\n")
-start_time <- Sys.time()
-ann_pred <- predict(ann_model, newdata = test_data)
-end_time <- Sys.time()
-cat("Prediction with ANN model completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
-
-ann_mse <- mean((test_data$amsr - ann_pred)^2)
-cat("ANN Model MSE:", ann_mse, "\n")
-
-# Function to apply polynomial regression model to a raster stack using the app function from terra
-apply_poly_to_raster <- function(raster_stack, poly_model, degree = 2) {
-  # Preserve the original time attribute
-  original_time <- time(raster_stack)
-  
-  # Extract the coefficients from the model
-  coeffs <- coef(poly_model)
-  
-  # Apply the polynomial regression model
-  processed_stack <- app(raster_stack, fun = function(x) {
-    # Initialize predicted values with the intercept
-    predicted_values <- coeffs[1]
-    # Apply polynomial terms
-    for (i in 1:degree) {
-      predicted_values <- predicted_values + coeffs[i + 1] * (x ^ i)
-    }
-    # Clamp predicted values to a 0-100 range
-    predicted_values <- pmin(pmax(predicted_values, 0), 100)
-    # Set all values below 15 to 0
-    predicted_values[predicted_values < 15] <- 0
-    return(predicted_values)
-  })
-  
-  # Restore the original time attribute
-  time(processed_stack) <- original_time
-  names(processed_stack) <- names(raster_stack)
-  return(processed_stack)
-}
-
-# Apply the polynomial regression model to the entire NSIDC dataset
-cat("Applying polynomial regression model to the entire NSIDC dataset...\n")
-processed_stack_poly <- apply_poly_to_raster(nsidc_resampled_to_12_5km, poly_model)
-cat("Application of polynomial regression model completed.\n")
-
-# Function to apply linear model to a raster stack using the app function from terra
-apply_lm_to_raster <- function(raster_stack, lm_model) {
-  # Preserve the original time attribute
-  original_time <- time(raster_stack)
-  
-  processed_stack <- app(raster_stack, fun = function(x) {
-    # Apply the linear model
-    predicted_values <- lm_model$coefficients[1] + lm_model$coefficients[2] * x
-    # Clamp predicted values to a 0-100 range
-    predicted_values <- pmin(pmax(predicted_values, 0), 100)
-    # Set all values below 15 to 0
-    predicted_values[predicted_values < 15] <- 0
-    return(predicted_values)
-  })
-  
-  # Restore the original time attribute
-  time(processed_stack) <- original_time
-  names(processed_stack) <- names(raster_stack)
-  return(processed_stack)
-}
-
-# Apply the linear regression model to the entire NSIDC dataset
-cat("Applying linear regression model to the entire NSIDC dataset...\n")
-processed_stack_lm <- apply_lm_to_raster(nsidc_resampled_to_12_5km, lm_model)
-cat("Application of linear regression model completed.\n")
-
-# Apply the ANN model to the entire NSIDC dataset
-cat("Applying ANN model to the entire NSIDC dataset...\n")
-apply_ann_to_raster <- function(raster_stack, ann_model) {
-  original_time <- time(raster_stack)
-  
-  cat("Applying ANN model to raster stack...\n")
-  start_time <- Sys.time()
-  processed_stack <- app(raster_stack, fun = function(x) {
-    # Apply the ANN model
-    predicted_values <- predict(ann_model, newdata = data.frame(nsidc = x))
-    # Clamp predicted values to a 0-100 range
-    predicted_values <- pmin(pmax(predicted_values, 0), 100)
-    # Set all values below 15 to 0
-    predicted_values[predicted_values < 15] <- 0
-    return(predicted_values)
-  })
-  end_time <- Sys.time()
-  cat("Applying ANN model completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
-  
-  # Restore the original time attribute
-  time(processed_stack) <- original_time
-  names(processed_stack) <- names(raster_stack)
-  return(processed_stack)
-}
-
-processed_stack_ann <- apply_ann_to_raster(nsidc_resampled_to_12_5km, ann_model)
-cat("Application of ANN model completed.\n")
-
-# Extract the first layer for plotting
-nsidc_first_layer <- nsidc_resampled_to_12_5km[[1]]
-amsr_first_layer <- amsr_cropped[[1]]
-processed_first_layer_lm <- processed_stack_lm[[1]]
-processed_first_layer_poly <- processed_stack_poly[[1]]
-# processed_first_layer_ann <- processed_stack_ann[[1]]
 
 
-# Plot the processed layers to verify
-cat("Plotting the results...\n")
-par(mfrow = c(2, 3))  # Set up the plotting area for side-by-side plots
-
-plot(nsidc_first_layer, main = "NSIDC Aligned - First Layer")
-plot(processed_first_layer_lm, main = "Processed Layer - Linear Regression")
-plot(processed_first_layer_poly, main = "Processed Layer - Polynomial Regression")
-# plot(processed_first_layer_ann, main = "Processed Layer - ANN")
-plot(amsr_first_layer, main = "AMSR")
 
 
-# Reset the plotting area
-par(mfrow = c(1, 1))
-cat("Plotting completed.\n")
 
-```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 **Template for Tidy Model MLP/ANN**
