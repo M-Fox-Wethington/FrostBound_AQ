@@ -315,7 +315,7 @@ cat("Best hyperparameters and tuning results saved.\n")
 
 
 
-**Train and Deploy NNET model**
+**Train NNET model**
 
 
 ```{r}
@@ -342,13 +342,13 @@ test_data <- normalized_sea_ice_concentration_df_clean[-train_indices, ]
 # Train the final ANN model with the best hyperparameters
 cat("Training the final ANN model with best hyperparameters...\n")
 start_time <- Sys.time()
-ann_model <- nnet(nsidc ~ amsr, data = train_data, size = 7, linout = TRUE, decay = 0.001, maxit = 500, trace = TRUE)
+ann_model <- nnet(amsr ~ nsidc, data = train_data, size = 7, linout = TRUE, decay = 0.001, maxit = 1500, trace = TRUE)
 end_time <- Sys.time()
 cat("Final ANN training completed in", difftime(end_time, start_time, units = "secs"), "seconds.\n")
 
 # Save the final trained ANN model
 cat("Saving the final ANN model...\n")
-# saveRDS(ann_model, file = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/final_ann_model.rds")
+saveRDS(ann_model, file = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/final_ann_model_1500-iterations.rds")
 cat("Final ANN model saved.\n")
 
 # Predict on the test set and evaluate the final ANN model
@@ -374,13 +374,28 @@ library(nnet)
 
 # Load the trained ANN model
 cat("Loading the trained ANN model...\n")
-ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/final_ann_model.rds")
+ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/final_ann_model_1500-iterations.rds")
 
 # Load the NSIDC raster stack
 nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif")
 
 # Load the AMSR raster stack
 amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif")
+
+
+# Extract the first layer of the NSIDC raster stack
+nsidc_first_layer <- nsidc_stack[[1]]
+
+# Create a mask of NA cells (land cells) from the first layer of the NSIDC raster
+na_mask <- is.na(nsidc_first_layer)
+
+# Apply this mask to the first layer of the AMSR raster stack
+amsr_first_layer <- amsr_stack[[1]]
+amsr_masked <- mask(amsr_first_layer, na_mask, maskvalue = 1, updatevalue = NA)
+
+terra:plot(amsr_masked)
+
+terra::plot(na_mask)
 
 # Extract the date information from the raster metadata
 nsidc_dates <- as.Date(time(nsidc_stack), origin = "1970-01-01")
@@ -436,7 +451,119 @@ terra::plot(amsr_overlap[[1]], colNA = "red", main = "AMSR Unified 12.5 km ")
 
 
 ```
+**ANN Model Assessment**
 
+```{r}
+library(terra)
+library(nnet)
+library(Metrics)
+
+# Load the trained ANN model
+cat("Loading the trained ANN model...\n")
+ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/final_ann_model.rds")
+
+# Load the NSIDC and AMSR raster stacks
+nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif")
+amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif")
+
+# Extract the date information from the raster metadata
+nsidc_dates <- as.Date(time(nsidc_stack), origin = "1970-01-01")
+amsr_dates <- as.Date(time(amsr_stack), origin = "1970-01-01")
+
+# Find common dates and subset the layers for the overlapping period
+common_dates <- as.Date(intersect(nsidc_dates, amsr_dates))
+nsidc_indices <- which(nsidc_dates %in% common_dates)
+
+amsr_indices <- which(amsr_dates %in% common_dates)
+amsr_overlap <- subset(amsr_stack, amsr_indices)
+nsidc_overlap <- subset(nsidc_stack, nsidc_indices)
+names(amsr_overlap) <- common_dates
+names(nsidc_overlap) <- common_dates
+
+# Define the prediction function for the ANN model
+predict_harmonized_values <- function(x) {
+  df_input <- data.frame(nsidc = x)
+  predicted_values <- predict(ann_model, df_input)
+  return(predicted_values)
+}
+
+# Harmonize the entire NSIDC stack
+harmonized_stack <- app(nsidc_overlap, predict_harmonized_values)
+
+# Compute statistical metrics
+compute_metrics <- function(actual, predicted) {
+  actual_values <- values(actual)
+  predicted_values <- values(predicted)
+  valid_indices <- !is.na(actual_values) & !is.na(predicted_values)
+  actual_values <- actual_values[valid_indices]
+  predicted_values <- predicted_values[valid_indices]
+  
+  mae <- mae(actual_values, predicted_values)
+  rmse <- rmse(actual_values, predicted_values)
+  r2 <- cor(actual_values, predicted_values)^2
+  
+  return(list(MAE = mae, RMSE = rmse, R2 = r2))
+}
+
+# Apply metrics to each layer
+metrics_list <- lapply(1:nlyr(amsr_overlap), function(i) {
+  actual <- amsr_overlap[[i]]
+  predicted <- harmonized_stack[[i]]
+  compute_metrics(actual, predicted)
+})
+
+# Extract individual metric values and calculate the averages
+mae_values <- sapply(metrics_list, function(x) x$MAE)
+rmse_values <- sapply(metrics_list, function(x) x$RMSE)
+r2_values <- sapply(metrics_list, function(x) x$R2)
+
+average_mae <- mean(mae_values, na.rm = TRUE)
+average_rmse <- mean(rmse_values, na.rm = TRUE)
+average_r2 <- mean(r2_values, na.rm = TRUE)
+
+# Print out average metrics
+cat("Average MAE:", average_mae, "\n")
+cat("Average RMSE:", average_rmse, "\n")
+cat("Average R2:", average_r2, "\n")
+
+# Optionally, plot the first layer of each stack for verification
+par(mfrow = c(1, 3))  # Set up the plotting area to have 1 row and 3 columns
+plot(nsidc_overlap[[1]], colNA = "red", main = "NSIDC 25km")
+plot(harmonized_stack[[1]], colNA = "red", main = "NSIDC 12.5 km Harmonized")
+plot(amsr_overlap[[1]], colNA = "red", main = "AMSR Unified 12.5 km ")
+
+# Save the harmonized stack if needed
+writeRaster(harmonized_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized_stack.tif", overwrite = TRUE)
+
+# Load the prepared dataset
+cat("Loading the prepared dataset...\n")
+normalized_sea_ice_concentration_df_clean <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/normalized_sea_ice_concentration_df_clean.rds")
+
+# Split into training and test sets
+set.seed(123)  # For reproducibility
+train_indices <- sample(1:nrow(normalized_sea_ice_concentration_df_clean), 0.8 * nrow(normalized_sea_ice_concentration_df_clean))
+train_data <- normalized_sea_ice_concentration_df_clean[train_indices, ]
+test_data <- normalized_sea_ice_concentration_df_clean[-train_indices, ]
+
+# Apply the ANN model to the test data
+test_predictions <- predict(ann_model, test_data)
+
+# Compute statistical metrics on the test data
+actual_test_values <- test_data$amsr
+predicted_test_values <- test_predictions
+
+mae_test <- mae(actual_test_values, predicted_test_values)
+rmse_test <- rmse(actual_test_values, predicted_test_values)
+r2_test <- cor(actual_test_values, predicted_test_values)^2
+
+# Print out metrics for the test data
+cat("Test Data Metrics:\n")
+cat("MAE:", mae_test, "\n")
+cat("RMSE:", rmse_test, "\n")
+cat("R2:", r2_test, "\n")
+
+
+```
 
 
 
@@ -449,7 +576,7 @@ library(nnet)
 
 # Load the trained ANN model
 cat("Loading the final ANN model...\n")
-ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/final_ann_model.rds")
+ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/final_ann_model_1500-iterations.rds")
 
 # Load the saved raster stack
 cat("Loading the NSIDC resampled raster stack...\n")
