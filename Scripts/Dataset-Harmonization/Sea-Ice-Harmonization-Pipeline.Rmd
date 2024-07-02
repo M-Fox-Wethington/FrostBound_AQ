@@ -127,6 +127,8 @@ print("Cropping datasets to intersecting extent...")
 amsr_cropped <- crop(amsr_12km, intersection_extent)
 nsidc_cropped <- crop(nsidc_aligned, intersection_extent)
 
+
+
 # Verify cropped extents
 print("Verifying cropped extents...")
 ext_amsr_cropped <- ext(amsr_cropped)
@@ -137,7 +139,7 @@ print(ext_nsidc_cropped)
 
 # Resample the cropped NSIDC dataset to 12.5 km resolution using bilinear interpolation
 print("Resampling NSIDC dataset to 12.5 km resolution...")
-nsidc_resampled_to_12_5km <- resample(nsidc_cropped, amsr_cropped, method = "bilinear")
+# nsidc_resampled_to_12_5km <- resample(nsidc_cropped, amsr_cropped, method = "bilinear")
 
 # Normalize each layer individually and then combine
 print("Normalizing AMSR raster values...")
@@ -147,10 +149,20 @@ amsr_normalized <- rast(lapply(1:nlyr(amsr_cropped), function(i) {
 }))
 
 print("Normalizing NSIDC raster values...")
-nsidc_normalized <- rast(lapply(1:nlyr(nsidc_resampled_to_12_5km), function(i) {
+nsidc_normalized <- rast(lapply(1:nlyr(nsidc_cropped), function(i) {
   print(paste("Normalizing NSIDC layer", i))
-  normalize_raster(nsidc_resampled_to_12_5km[[i]])
+  normalize_raster(nsidc_cropped[[i]])
 }))
+
+
+nsidc_cropped <- nsidc_cropped / 100
+
+
+# print("Normalizing NSIDC raster values...")
+# nsidc_normalized <- rast(lapply(1:nlyr(nsidc_resampled_to_12_5km), function(i) {
+#   print(paste("Normalizing NSIDC layer", i))
+#   normalize_raster(nsidc_resampled_to_12_5km[[i]])
+# }))
 
 # Extract the time information
 print("Extracting time information...")
@@ -355,26 +367,18 @@ cat("Final ANN model saved.\n")
 
 ```{r}
 
-# Load the necessary libraries
 library(terra)
 library(nnet)
 library(dplyr)
-library(yardstick)
 
 # Load the trained ANN model
 cat("Loading the trained ANN model...\n")
 ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/final_ann_model_1500-iterations.rds")
 
-# Load the NSIDC raster stack
+# Load the NSIDC raster stack and extract the time information
 cat("Loading the NSIDC raster stack...\n")
 nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif")
-
-# Load the AMSR raster stack
-cat("Loading the AMSR raster stack...\n")
-amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif")
-
-# Extract the date information from the raster metadata
-nsidc_dates <- as.Date(time(nsidc_stack), origin = "1970-01-01")
+original_dates <- time(nsidc_stack)  # Extracting time before any processing
 
 # Define the prediction function
 predict_harmonized_values <- function(x) {
@@ -389,9 +393,28 @@ harmonized_stack <- app(nsidc_stack, predict_harmonized_values)
 
 # Set values above 1 to 1
 harmonized_stack <- ifel(harmonized_stack > 1, 1, harmonized_stack)
+harmonized_stack <- ifel(harmonized_stack < 1, 0, harmonized_stack)
 
-# Assign the original dates to the harmonized stack
-names(harmonized_stack) <- nsidc_dates
+harmonized_stack <- harmonized_stack *100
+
+
+# # Assuming 'nsidc_overlap' and 'harmonized_stack' are already loaded in your R session
+# # Extract the time information from nsidc_overlap
+# nsidc_dates <- time(nsidc_overlap)
+# 
+# # Assign these dates to harmonized_stack
+# terra::time(harmonized_stack) <- nsidc_dates
+# 
+# # Verify the time assignment
+# print(time(harmonized_stack))
+# 
+# # Optionally, save the updated harmonized_stack with the assigned dates
+# writeRaster(harmonized_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/exports/harmonized_stack_with_dates.tif", overwrite = TRUE)
+# 
+# 
+# # Reassign the original dates to the harmonized stack
+# terra::time(harmonized_stack) <- nsidc_overlap
+
 
 # Plot the first layer for verification
 par(mfrow = c(1, 2))  # Set up the plotting area to have 1 row and 2 columns
@@ -399,19 +422,193 @@ plot(nsidc_stack[[1]], colNA = "red", main = "NSIDC 25km")
 plot(harmonized_stack[[1]], colNA = "red", main = "NSIDC 12.5 km Harmonized")
 
 # Set the output directory
-# output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset"
+output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset"
 # dir.create(output_dir, showWarnings = FALSE)
 
 # # Save the harmonized NSIDC raster stack
 # cat("Saving the Harmonized NSIDC raster stack...\n")
-# # writeRaster(harmonized_stack, filename = file.path(output_dir, "nsidc_12_5km_normalized_1979-2023.tif"), overwrite = TRUE)
+writeRaster(harmonized_stack, filename = file.path(output_dir, "nsidc_12_5km_harmonized_1979-2023.tif"), overwrite = TRUE)
 # cat("Harmonized NSIDC raster stack saved.\n")
 
 
 
 ```
 
-## Assess Model Performance
+## Assess Model Performance by comparing overlapping period
+
+
+
+
+**Ensure all datasets are comparable**
+
+```{r}
+# Load necessary libraries
+library(terra)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+# Define file paths for the raster datasets
+amsr_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif"
+nsidc_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_common_dates.tif"
+nsidc_harmonized_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_harmonized_common_dates.tif"
+
+# Load the raster datasets
+amsr_stack <- rast(amsr_path)
+nsidc_stack <- rast(nsidc_path)
+nsidc_harmonized_stack <- rast(nsidc_harmonized_path)
+
+# Extract the date information from the raster metadata
+amsr_dates <- as.Date(terra::time(amsr_stack), origin = "1970-01-01")
+nsidc_dates <- as.Date(terra::time(nsidc_stack), origin = "1970-01-01")
+nsidc_harmonized_dates <- as.Date(terra::time(nsidc_harmonized_stack), origin = "1970-01-01")
+
+
+# Ensure the extents are the same
+if (!all.equal(ext(amsr_stack), ext(nsidc_stack)) || 
+    !all.equal(ext(amsr_stack), ext(nsidc_harmonized_stack))) {
+  stop("The extents of the raster stacks do not match.")
+}
+
+# Ensure the date ranges are the same
+if (!(all(range(amsr_dates)[1] == range(nsidc_dates)[1], range(amsr_dates)[1] == range(nsidc_harmonized_dates)[1]) &&
+      all(range(amsr_dates)[2] == range(nsidc_dates)[2], range(amsr_dates)[2] == range(nsidc_harmonized_dates)[2]))) {
+  stop("The date ranges of the raster stacks do not match.")
+}
+
+# Ensure the included dates are exactly the same
+if (!(all(amsr_dates == nsidc_dates) && all(amsr_dates == nsidc_harmonized_dates))) {
+  stop("The dates included in the raster stacks do not match.")
+}
+
+cat("All checks passed: Extents, date ranges, and exact dates are the same.\n")
+
+
+```
+
+Visualize the datasets 
+```{r}
+
+# Load necessary libraries
+library(terra)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+
+# Define file paths for the raster datasets
+amsr_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif"
+nsidc_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_common_dates.tif"
+nsidc_harmonized_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_harmonized_common_dates.tif"
+
+# Load the raster datasets
+amsr_stack <- rast(amsr_path)
+nsidc_stack <- rast(nsidc_path)
+nsidc_harmonized_stack <- rast(nsidc_harmonized_path)
+
+# Extract the date information from the raster metadata
+amsr_dates <- as.Date(terra::time(amsr_stack), origin = "1970-01-01")
+nsidc_dates <- as.Date(terra::time(nsidc_stack), origin = "1970-01-01")
+nsidc_harmonized_dates <- as.Date(terra::time(nsidc_harmonized_stack), origin = "1970-01-01")
+
+
+# Ensure the extents are the same
+if (!all.equal(ext(amsr_stack), ext(nsidc_stack)) || 
+    !all.equal(ext(amsr_stack), ext(nsidc_harmonized_stack))) {
+  stop("The extents of the raster stacks do not match.")
+}
+
+# Ensure the date ranges are the same
+if (!(all(range(amsr_dates)[1] == range(nsidc_dates)[1], range(amsr_dates)[1] == range(nsidc_harmonized_dates)[1]) &&
+      all(range(amsr_dates)[2] == range(nsidc_dates)[2], range(amsr_dates)[2] == range(nsidc_harmonized_dates)[2]))) {
+  stop("The date ranges of the raster stacks do not match.")
+}
+
+# Ensure the included dates are exactly the same
+if (!(all(amsr_dates == nsidc_dates) && all(amsr_dates == nsidc_harmonized_dates))) {
+  stop("The dates included in the raster stacks do not match.")
+}
+
+cat("All checks passed: Extents, date ranges, and exact dates are the same.\n")
+
+
+
+# Calculate the area of one cell in square kilometers
+cell_area_sq_km <- prod(res(amsr_stack)) / 1e6
+
+# Function to calculate sea ice extent statistics
+calculate_layer_stats <- function(layer, date, cell_area_sq_km) {
+  valid_ice_cells <- global(layer, fun = function(x) sum(x >= 0.15, na.rm = TRUE))
+  total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_km)  # Total ice area in square kilometers
+  return(data.frame(ice_extent_km = total_ice_area_sq_km, date = date))
+}
+
+# Function to process the raster data and calculate statistics
+process_data <- function(raster, dates, cell_area_sq_km) {
+  sea_ice_stats <- lapply(1:nlyr(raster), function(i) {
+    calculate_layer_stats(raster[[i]], dates[i], cell_area_sq_km)
+  })
+  sea_ice_stats_df <- do.call(rbind, sea_ice_stats) %>%
+    mutate(Date = as.Date(date), Year = year(Date), Month = month(Date, label = TRUE, abbr = TRUE))
+  return(sea_ice_stats_df)
+}
+
+# Process each raster stack
+amsr_stats <- process_data(amsr_stack, amsr_dates, cell_area_sq_km) %>%
+  mutate(Source = "AMSR")
+nsidc_stats <- process_data(nsidc_stack, nsidc_dates, cell_area_sq_km) %>%
+  mutate(Source = "NSIDC")
+nsidc_harmonized_stats <- process_data(nsidc_harmonized_stack, nsidc_harmonized_dates, cell_area_sq_km) %>%
+  mutate(Source = "NSIDC_Harmonized")
+
+
+# Filter for winter months (June, July, August, September)
+winter_months <- c("Jun", "Jul", "Aug", "Sep")
+
+amsr_winter_stats <- amsr_stats %>% filter(Month %in% winter_months)
+nsidc_winter_stats <- nsidc_stats %>% filter(Month %in% winter_months)
+nsidc_harmonized_winter_stats <- nsidc_harmonized_stats %>% filter(Month %in% winter_months)
+
+
+
+# Calculate average winter sea ice extent per year for each dataset
+amsr_avg_winter_extent <- amsr_winter_stats %>% group_by(Year) %>% summarize(avg_extent = mean(global, na.rm = TRUE))
+nsidc_avg_winter_extent <- nsidc_winter_stats %>% group_by(Year) %>% summarize(avg_extent = mean(global, na.rm = TRUE))
+nsidc_harmonized_avg_winter_extent <- nsidc_harmonized_winter_stats %>% group_by(Year) %>% summarize(avg_extent = mean(global, na.rm = TRUE))
+
+
+
+# # Combine all results into a single data frame
+# sea_ice_extent_df <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats)
+# 
+# # Print the data frame
+# print(sea_ice_extent_df)
+
+
+# Merge the datasets for plotting
+avg_winter_extent <- full_join(amsr_avg_winter_extent, nsidc_avg_winter_extent, by = "Year", suffix = c("_amsr", "_nsidc"))
+avg_winter_extent <- full_join(avg_winter_extent, nsidc_harmonized_avg_winter_extent, by = "Year")
+avg_winter_extent <- avg_winter_extent %>% rename(avg_extent_harmonized = avg_extent)
+
+# Plotting
+ggplot(data = avg_winter_extent, aes(x = Year)) +
+  geom_line(aes(y = amsr_avg_winter_extent, color = "AMSR 12.5 km"), size = 1.2) +
+  geom_line(aes(y = nsidc_avg_winter_extent, color = "NSIDC 25 km"), size = 1.2) +
+  geom_line(aes(y = nsidc_harmonized_avg_winter_extent, color = "NSIDC Harmonized 12.5 km"), size = 1.2) +
+  labs(title = "Average Winter Sea Ice Extent (June-September)",
+       x = "Year",
+       y = "Average Sea Ice Extent (sq km)",
+       color = "Dataset") +
+  theme_minimal()
+
+# Optionally, you can save this plot using ggsave()
+# ggsave("path_to_save_plot/sea_ice_extent_comparison.pdf")
+
+
+
+
+
+
+```
 
 **ANN Model Assessment**
 
@@ -433,11 +630,11 @@ normalized_sea_ice_concentration_df_clean <- readRDS("D:/Manuscripts_localData/F
 
 # Load the NSIDC raster stack
 cat("Loading the NSIDC raster stack...\n")
-nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif")
+nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_common_dates.tif")
 
 # Load the AMSR raster stack
 cat("Loading the AMSR raster stack...\n")
-amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif")
+amsr_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif")
 
 # Extract the date information from the raster metadata
 nsidc_dates <- as.Date(time(nsidc_stack), origin = "1970-01-01")
@@ -460,6 +657,20 @@ cat("Setting layer names for AMSR and NSIDC overlap layers...\n")
 names(amsr_overlap) <- common_dates
 names(nsidc_overlap) <- common_dates
 
+
+# Define the output file path
+output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_12_5km_harmonized_winter_2012-2023.tif"
+
+# Export the updated harmonized_stack to the specified directory
+writeRaster(amsr_overlap, output_path, overwrite = TRUE)
+
+# Define the output file path
+output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_25km_harmonized_winter_2012-2023.tif"
+
+# Export the updated harmonized_stack to the specified directory
+writeRaster(nsidc_overlap, output_path, overwrite = TRUE)
+
+
 # Define the prediction function
 predict_harmonized_values <- function(x) {
   df_input <- data.frame(nsidc = x)
@@ -470,6 +681,26 @@ predict_harmonized_values <- function(x) {
 # Harmonize the NSIDC stack
 cat("Applying the ANN model to the NSIDC layers...\n")
 harmonized_stack <- app(nsidc_overlap, predict_harmonized_values)
+
+
+# Assuming 'nsidc_overlap' and 'harmonized_stack' are already loaded in your R session
+# Extract the time information from nsidc_overlap
+nsidc_dates <- time(nsidc_overlap)
+
+# Assign these dates to harmonized_stack
+time(harmonized_stack) <- nsidc_dates
+
+# Verify the time assignment
+print(time(harmonized_stack))
+
+# Assuming 'harmonized_stack' has already been updated with the dates from 'nsidc_overlap' in your R session
+# Define the output file path
+output_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_12_5km_harmonized_winter_2012-2023.tif"
+
+# Export the updated harmonized_stack to the specified directory
+writeRaster(harmonized_stack, output_path, overwrite = TRUE)
+
+cat("Harmonized stack with dates has been successfully exported to:", output_path, "\n")
 
 # Compute statistical metrics
 compute_metrics <- function(actual, predicted) {
@@ -546,6 +777,13 @@ cat("CCC:", ccc_result$.estimate, "\n")
 cat("Huber Loss:", huber_loss_result$.estimate, "\n")
 cat("RPIQ:", rpiq_result$.estimate, "\n")
 cat("RPD:", rpd_result$.estimate, "\n")
+
+
+nsidc_dates <- terra::time(harmonized_stack) <- amsr_dates
+
+terra::time(harmonized_stack) <- amsr_dates
+
+length(amsr_dates)
 
 # Optionally, plot the first layer of each stack for verification
 par(mfrow = c(1, 3))  # Set up the plotting area to have 1 row and 3 columns
