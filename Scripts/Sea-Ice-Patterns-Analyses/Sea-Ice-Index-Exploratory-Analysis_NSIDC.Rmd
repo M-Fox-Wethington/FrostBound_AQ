@@ -633,7 +633,7 @@ ggplot() +
 
 ```
 
-**Dail  Extent Anomalies (Squiqqles)**
+**Daily  Extent Anomalies (Squiqqles)**
 
 ```{r}
 # Load necessary libraries
@@ -739,28 +739,29 @@ library(lubridate)
 library(zoo)
 
 # Load the NSIDC 25 km dataset for the Antarctic Peninsula
-nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+nsidc_harmonized <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/nsidc_12_5km_harmonized_1979-2023.tif")
+
 
 # Extract dates from raster layers
-dates <- time(nsidc_25km)
-names(nsidc_25km) <- dates
+dates <- time(nsidc_harmonized)
+names(nsidc_harmonized) <- dates
 
 # Calculate the area of one cell in square meters
-cell_area_sq_meters <- prod(res(nsidc_25km))
+cell_area_sq_meters <- prod(res(nsidc_harmonized))
 
 # Apply the thresholding operation across the entire dataset
-nsidc_25km_thresh <- app(nsidc_25km, fun = function(x) { x[x < 15] <- 0; return(x) })
+nsidc_harmonized_thresh <- app(nsidc_harmonized, fun = function(x) { x[x < .15] <- 0; return(x) })
 
 # Function to calculate sea ice extent for a given raster layer
 calculate_layer_stats <- function(layer, date, cell_area_sq_meters) {
-  valid_ice_cells <- global(layer, fun = function(x) sum(x >= 15, na.rm = TRUE))
+  valid_ice_cells <- global(layer, fun = function(x) sum(x >= .15, na.rm = TRUE))
   total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6  # Convert total ice area to square kilometers
   return(data.frame(ice_extent_km = total_ice_area_sq_km, date = date))
 }
 
 # Calculate sea ice extent for each layer
-sea_ice_stats <- lapply(1:nlyr(nsidc_25km_thresh), function(i) {
-  calculate_layer_stats(nsidc_25km_thresh[[i]], dates[i], cell_area_sq_meters)
+sea_ice_stats <- lapply(1:nlyr(nsidc_harmonized_thresh), function(i) {
+  calculate_layer_stats(nsidc_harmonized_thresh[[i]], dates[i], cell_area_sq_meters)
 })
 
 # Convert list to data frame
@@ -898,11 +899,11 @@ plot_continent <- ggplot() +
   )
 
 # Load the Antarctic Peninsula data
-nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
-dates <- time(nsidc_25km)
-names(nsidc_25km) <- dates
-cell_area_sq_meters <- prod(res(nsidc_25km))
-nsidc_25km_thresh <- app(nsidc_25km, fun = function(x) { x[x < 15] <- 0; return(x) })
+nsidc_harmonized <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/nsidc_12_5km_harmonized_1979-2023.tif")
+dates <- time(nsidc_harmonized)
+names(nsidc_harmonized) <- dates
+cell_area_sq_meters <- prod(res(nsidc_harmonized))
+nsidc_harmonized_thresh <- app(nsidc_harmonized, fun = function(x) { x[x < .15] <- 0; return(x) })
 
 # Function to calculate sea ice extent for a given raster layer
 calculate_layer_stats <- function(layer, date, cell_area_sq_meters) {
@@ -912,8 +913,8 @@ calculate_layer_stats <- function(layer, date, cell_area_sq_meters) {
 }
 
 # Calculate sea ice extent for each layer
-sea_ice_stats <- lapply(1:nlyr(nsidc_25km_thresh), function(i) {
-  calculate_layer_stats(nsidc_25km_thresh[[i]], dates[i], cell_area_sq_meters)
+sea_ice_stats <- lapply(1:nlyr(nsidc_harmonized_thresh), function(i) {
+  calculate_layer_stats(nsidc_harmonized_thresh[[i]], dates[i], cell_area_sq_meters)
 })
 sea_ice_stats_df <- do.call(rbind, sea_ice_stats)
 sea_ice_stats_df <- sea_ice_stats_df %>%
@@ -1035,7 +1036,10 @@ ggplot(data = annual_avg_anomaly, aes(x = Year, y = Average_Anomaly, color = Mon
 
 ```
 
+
+
 **Consolidated Winter Extent Anomolies**
+
 ```{r}
 # Filter data for the winter months (June to September)
 sea_ice_winter <- sea_ice_stats_df %>%
@@ -1062,7 +1066,7 @@ ggplot(annual_winter_avg_anomaly, aes(x = Year, y = Annual_Winter_Average_Anomal
   theme_minimal(base_size = 15) +
   theme(
     plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
-    plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"),
+    plot.subtitle = element_text(hjust = 0.5, size = 12, color = "black"),
     plot.caption = element_text(size = 10, color = "black"),
     axis.title = element_text(face = "bold", size = 14, color = "black"),
     axis.text = element_text(size = 12, color = "black"),
@@ -1073,14 +1077,14 @@ ggplot(annual_winter_avg_anomaly, aes(x = Year, y = Annual_Winter_Average_Anomal
     axis.ticks = element_line(color = "black")
   )
 
-
-
 ```
 
 
 **Subregion Trends**
+   
+   
+   
 ```{r}
-
 # Load necessary libraries
 library(terra)
 library(dplyr)
@@ -1090,22 +1094,26 @@ library(zoo)
 library(patchwork)
 
 # Load the NSIDC 25 km dataset
-nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/nsidc_12_5km_harmonized_1979-2023.tif")
+
 
 # Load the study area shapefile
-study_area <- vect("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp")
+study_area <- vect("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp")
 
 # Calculate the area for each region and append it
 study_area$Area_km2 <- expanse(study_area, unit = "km")
 
 # Function to generate sea ice extent anomaly plots
 generate_sea_ice_plots <- function(nsicd_raster, study_area, dates) {
+  
+  # Function to calculate sea ice extent statistics
   calculate_layer_stats <- function(layer, date, cell_area_sq_km) {
-    valid_ice_cells <- global(layer, fun = function(x) sum(x >= 15, na.rm = TRUE))
+    valid_ice_cells <- global(layer, fun = function(x) sum(x >= 0.15, na.rm = TRUE))
     total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_km)  # Total ice area in square kilometers
     return(data.frame(ice_extent_km = total_ice_area_sq_km, date = date))
   }
   
+  # Function to process the raster data and calculate statistics
   process_data <- function(raster, dates) {
     cell_area_sq_km <- prod(res(raster)) / 1e6  # Convert cell area to square kilometers
     sea_ice_stats <- lapply(1:nlyr(raster), function(i) {
@@ -1113,10 +1121,11 @@ generate_sea_ice_plots <- function(nsicd_raster, study_area, dates) {
     })
     sea_ice_stats_df <- do.call(rbind, sea_ice_stats) %>%
       mutate(Date = as.Date(date), Year = year(Date), Month = month(Date, label = TRUE, abbr = TRUE)) %>%
-      rename(ice_extent_km = global)
+      rename(ice_extent_km = global)  # Updated rename step to match your preferences
     return(sea_ice_stats_df)
   }
   
+  # Function to calculate anomalies based on a baseline period
   calculate_anomalies <- function(data, baseline_start, baseline_end) {
     baseline_stats <- data %>%
       filter(Date >= baseline_start & Date <= baseline_end)
@@ -1140,6 +1149,7 @@ generate_sea_ice_plots <- function(nsicd_raster, study_area, dates) {
       filter(Month %in% c("Jun", "Jul", "Aug", "Sep")) %>%
       group_by(Year) %>%
       summarise(Annual_Winter_Average_Anomaly = mean(Smoothed_Anomaly, na.rm = TRUE))
+    
     plot <- ggplot(winter_data, aes(x = Year, y = Annual_Winter_Average_Anomaly)) +
       geom_line(size = 0.8, color = line_color) +
       geom_point(color = line_color, size = 2, pch = 21, fill = line_color, stroke = 1) +
@@ -1147,19 +1157,24 @@ generate_sea_ice_plots <- function(nsicd_raster, study_area, dates) {
       labs(
         title = title,
         x = "Year",
-        y = "Extent Anomaly (square kilometers)"  # Adjust the label to be accurate
+        y = "Extent Anomaly (square kilometers)"
       ) +
       theme_minimal(base_size = 15) +
       theme(
         plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
         axis.title = element_text(face = "bold", size = 14, color = "black"),
-        axis.text = element_text(size = 12, color = "black"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),  # Rotate text
+        axis.text.y = element_text(size = 12, color = "black"),
         legend.position = "none",
         panel.grid.major = element_line(color = "#e6e6e6"),
         panel.grid.minor = element_blank(),
         axis.line = element_line(color = "black"),
-        axis.ticks = element_line(color = "black")
+        axis.ticks = element_line(color = "black"),
+        plot.margin = margin(1, 1, 1, 1, "cm"),
+        axis.title.x = element_text(margin = margin(t = 10, b = 10)),
+        axis.title.y = element_text(margin = margin(r = 10, l = 10))
       )
+    
     if (!is.null(subtitle)) {
       plot <- plot + labs(subtitle = subtitle) +
         theme(plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"))
@@ -1167,7 +1182,8 @@ generate_sea_ice_plots <- function(nsicd_raster, study_area, dates) {
     return(plot)
   }
   
-  nsidc_thresh <- app(nsicd_raster, fun = function(x) { x[x < 15] <- 0; return(x) })
+  
+  nsidc_thresh <- app(nsicd_raster, fun = function(x) { x[x < .15] <- 0; return(x) })
   sea_ice_stats_df <- process_data(nsidc_thresh, dates)
   sea_ice_stats_df <- calculate_anomalies(sea_ice_stats_df, as.Date("1981-01-01"), as.Date("2010-12-31"))
   plots <- list()
@@ -1185,7 +1201,7 @@ generate_sea_ice_plots <- function(nsicd_raster, study_area, dates) {
     region_shape <- study_area[study_area$Region == region, ]
     region_raster <- crop(nsicd_raster, region_shape)
     region_masked <- mask(region_raster, region_shape)
-    region_thresh <- app(region_masked, fun = function(x) { x[x < 15] <- 0; return(x) })
+    region_thresh <- app(region_masked, fun = function(x) { x[x < .15] <- 0; return(x) })
     region_stats_df <- process_data(region_thresh, dates)
     region_stats_df <- calculate_anomalies(region_stats_df, as.Date("1981-01-01"), as.Date("2010-12-31"))
     region_area_size <- round(sum(region_shape$Area_km2, na.rm = TRUE))
@@ -1197,18 +1213,28 @@ generate_sea_ice_plots <- function(nsicd_raster, study_area, dates) {
 # Generate and display the plots
 plots <- generate_sea_ice_plots(nsicd_raster = nsidc_25km, study_area = study_area, dates = time(nsidc_25km))
 
-# Combine the plots using patchwork
-combined_plot <- plots$Entire_Study_Area / 
-  (plots$`Offshore_Region` | plots$`Mid-Shelf Region` | plots$`Northern Shelf Region` | plots$`Southern Shelf Region`) + 
-  plot_layout(ncol = 1, heights = c(1, 1)) &
-  plot_annotation(
-    caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline",
-    theme = theme(
-      plot.caption = element_text(size = 10, color = "black", hjust = 0.5)
+# Check that all regional plots exist before combining
+if (all(c("Offshore", "Middle Shelf", "Northern Shelf", "Southern Shelf") %in% names(plots))) {
+  # Combine the plots using patchwork
+  combined_plot <- plots$Entire_Study_Area /
+    (plots$Offshore | plots$`Middle Shelf` | plots$`Northern Shelf` | plots$`Southern Shelf`) +
+    plot_layout(ncol = 1, heights = c(1, 1)) &
+    plot_annotation(
+      caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline",
+      theme = theme(
+        plot.caption = element_text(size = 10, color = "black", hjust = 0.5)
+      )
     )
-  )
+  
+  # Display the combined plot
+  print(combined_plot)
+} else {
+  message("One or more regional plots are missing")
+}
+
 
 # Display the combined plot
 print(combined_plot)
+
 
 ```
