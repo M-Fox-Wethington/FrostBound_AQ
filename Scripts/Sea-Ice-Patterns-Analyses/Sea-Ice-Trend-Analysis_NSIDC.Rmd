@@ -1098,13 +1098,312 @@ gls_summary_df
 
 ```
 
+**Analaysis - Mean Monthly Duration**
+
+```{r}
+
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(nlme)
+library(wesanderson)
+library(scales)
+library(lmtest) # For Breusch-Pagan test
+library(nortest) # For Shapiro-Wilk test
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds")
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Calculate monthly averages of ice extent for each region
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(Mean_Monthly_Duration  = mean(Mean_Monthly_Duration, na.rm = TRUE), 
+            Mean_Monthly_Duration_SD = sd(Mean_Monthly_Duration, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup()
+
+# Create a time variable for trend analysis
+monthly_averages <- monthly_averages %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+
+# Define a function to fit a GLS model for a given region and month
+fit_gls_model <- function(region_data) {
+  gls_model <- gls(Mean_Monthly_Duration ~ Time, correlation = corAR1(), data = region_data)
+  return(gls_model)
+}
+
+# Apply the model for each unique region and month combination and store the results
+regions <- unique(monthly_averages$Region)
+months <- unique(monthly_averages$Month)
+gls_results <- list()
+
+for (region in regions) {
+  for (month in months) {
+    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
+    if (nrow(region_month_data) > 1) {
+      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
+    }
+  }
+}
+
+# Run GLS model for annual (June-September) metrics
+annual_metrics <- winter_metrics %>%
+  group_by(Year, Region) %>%
+  summarise(Mean_Monthly_Duration = mean(Mean_Monthly_Duration, na.rm = TRUE), 
+            Mean_Monthly_Duration_sd = sd(Mean_Monthly_Duration, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup() %>%
+  mutate(Time = as.numeric(Year))
+
+for (region in regions) {
+  region_annual_data <- annual_metrics %>% filter(Region == region)
+  if (nrow(region_annual_data) > 1) {
+    gls_results[[paste(region, "Annual", sep = "_")]] <- fit_gls_model(region_annual_data)
+  }
+}
+
+# Initialize a dataframe to store the GLS results
+gls_summary_df <- data.frame(
+  Region = character(),
+  Metric = character(),
+  Month = character(),
+  Intercept_Estimate = numeric(),
+  Intercept_StdError = numeric(),
+  Intercept_tValue = numeric(),
+  Intercept_pValue = numeric(),
+  Time_Estimate = numeric(),
+  Time_StdError = numeric(),
+  Time_tValue = numeric(),
+  Time_pValue = numeric(),
+  Adjusted_Time_pValue = numeric(),
+  AIC = numeric(),
+  BIC = numeric(),
+  LogLik = numeric(),
+  Residual_StdError = numeric(),
+  DF_Residual = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Extract and organize GLS model results
+for (key in names(gls_results)) {
+  model <- gls_results[[key]]
+  summary_model <- summary(model)
+  
+  # Extract coefficients
+  coefficients <- summary_model$tTable
+  intercept_estimate <- coefficients["(Intercept)", "Value"]
+  intercept_std_error <- coefficients["(Intercept)", "Std.Error"]
+  intercept_t_value <- coefficients["(Intercept)", "t-value"]
+  intercept_p_value <- coefficients["(Intercept)", "p-value"]
+  
+  time_estimate <- coefficients["Time", "Value"]
+  time_std_error <- coefficients["Time", "Std.Error"]
+  time_t_value <- coefficients["Time", "t-value"]
+  time_p_value <- coefficients["Time", "p-value"]
+  
+  # Bonferroni correction for multiple comparisons
+  num_tests <- length(gls_results)
+  adjusted_time_p_value <- p.adjust(time_p_value, method = "bonferroni", n = num_tests)
+  
+  # Extract other statistics
+  aic <- AIC(model)
+  bic <- BIC(model)
+  log_lik <- logLik(model)
+  residual_std_error <- summary_model$sigma
+  df_residual <- summary_model$dims$N - summary_model$dims$p
+  
+  # Split key to get region and month
+  key_split <- unlist(strsplit(key, "_"))
+  region <- key_split[1]
+  month <- ifelse(length(key_split) > 1, key_split[2], "Annual")
+  
+  # Append to dataframe
+  gls_summary_df <- rbind(gls_summary_df, data.frame(
+    Region = region,
+    Metric = "Mean_Monthly_Duration",
+    Month = month,
+    Intercept_Estimate = intercept_estimate,
+    Intercept_StdError = intercept_std_error,
+    Intercept_tValue = intercept_t_value,
+    Intercept_pValue = intercept_p_value,
+    Time_Estimate = time_estimate,
+    Time_StdError = time_std_error,
+    Time_tValue = time_t_value,
+    Time_pValue = time_p_value,
+    Adjusted_Time_pValue = adjusted_time_p_value,
+    AIC = aic,
+    BIC = bic,
+    LogLik = log_lik,
+    Residual_StdError = residual_std_error,
+    DF_Residual = df_residual
+  ))
+}
+
+# Save the organized GLS summary dataframe to a CSV file
+write.csv(gls_summary_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Mean_Monthly_Duration_Summary_Results_with_Bonferroni.csv", row.names = FALSE)
+
+gls_summary_df
+
+```
 
 
+**Analysis - Variability of Mean Monthly Duration**
 
+```{r}
 
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(nlme)
+library(wesanderson)
+library(scales)
+library(lmtest) # For Breusch-Pagan test
+library(nortest) # For Shapiro-Wilk test
 
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds")
 
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
 
+# Calculate monthly averages of ice extent for each region
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(Duration_SD  = mean(Duration_SD, na.rm = TRUE), 
+            Duration_SD_sd = sd(Duration_SD, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup()
+
+# Create a time variable for trend analysis
+monthly_averages <- monthly_averages %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+
+# Define a function to fit a GLS model for a given region and month
+fit_gls_model <- function(region_data) {
+  gls_model <- gls(Duration_SD ~ Time, correlation = corAR1(), data = region_data)
+  return(gls_model)
+}
+
+# Apply the model for each unique region and month combination and store the results
+regions <- unique(monthly_averages$Region)
+months <- unique(monthly_averages$Month)
+gls_results <- list()
+
+for (region in regions) {
+  for (month in months) {
+    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
+    if (nrow(region_month_data) > 1) {
+      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
+    }
+  }
+}
+
+# Run GLS model for annual (June-September) metrics
+annual_metrics <- winter_metrics %>%
+  group_by(Year, Region) %>%
+  summarise(Duration_SD = mean(Duration_SD, na.rm = TRUE), 
+            Duration_SD_sd = sd(Duration_SD, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup() %>%
+  mutate(Time = as.numeric(Year))
+
+for (region in regions) {
+  region_annual_data <- annual_metrics %>% filter(Region == region)
+  if (nrow(region_annual_data) > 1) {
+    gls_results[[paste(region, "Annual", sep = "_")]] <- fit_gls_model(region_annual_data)
+  }
+}
+
+# Initialize a dataframe to store the GLS results
+gls_summary_df <- data.frame(
+  Region = character(),
+  Metric = character(),
+  Month = character(),
+  Intercept_Estimate = numeric(),
+  Intercept_StdError = numeric(),
+  Intercept_tValue = numeric(),
+  Intercept_pValue = numeric(),
+  Time_Estimate = numeric(),
+  Time_StdError = numeric(),
+  Time_tValue = numeric(),
+  Time_pValue = numeric(),
+  Adjusted_Time_pValue = numeric(),
+  AIC = numeric(),
+  BIC = numeric(),
+  LogLik = numeric(),
+  Residual_StdError = numeric(),
+  DF_Residual = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Extract and organize GLS model results
+for (key in names(gls_results)) {
+  model <- gls_results[[key]]
+  summary_model <- summary(model)
+  
+  # Extract coefficients
+  coefficients <- summary_model$tTable
+  intercept_estimate <- coefficients["(Intercept)", "Value"]
+  intercept_std_error <- coefficients["(Intercept)", "Std.Error"]
+  intercept_t_value <- coefficients["(Intercept)", "t-value"]
+  intercept_p_value <- coefficients["(Intercept)", "p-value"]
+  
+  time_estimate <- coefficients["Time", "Value"]
+  time_std_error <- coefficients["Time", "Std.Error"]
+  time_t_value <- coefficients["Time", "t-value"]
+  time_p_value <- coefficients["Time", "p-value"]
+  
+  # Bonferroni correction for multiple comparisons
+  num_tests <- length(gls_results)
+  adjusted_time_p_value <- p.adjust(time_p_value, method = "bonferroni", n = num_tests)
+  
+  # Extract other statistics
+  aic <- AIC(model)
+  bic <- BIC(model)
+  log_lik <- logLik(model)
+  residual_std_error <- summary_model$sigma
+  df_residual <- summary_model$dims$N - summary_model$dims$p
+  
+  # Split key to get region and month
+  key_split <- unlist(strsplit(key, "_"))
+  region <- key_split[1]
+  month <- ifelse(length(key_split) > 1, key_split[2], "Annual")
+  
+  # Append to dataframe
+  gls_summary_df <- rbind(gls_summary_df, data.frame(
+    Region = region,
+    Metric = "Duration-Variability",
+    Month = month,
+    Intercept_Estimate = intercept_estimate,
+    Intercept_StdError = intercept_std_error,
+    Intercept_tValue = intercept_t_value,
+    Intercept_pValue = intercept_p_value,
+    Time_Estimate = time_estimate,
+    Time_StdError = time_std_error,
+    Time_tValue = time_t_value,
+    Time_pValue = time_p_value,
+    Adjusted_Time_pValue = adjusted_time_p_value,
+    AIC = aic,
+    BIC = bic,
+    LogLik = log_lik,
+    Residual_StdError = residual_std_error,
+    DF_Residual = df_residual
+  ))
+}
+
+# Save the organized GLS summary dataframe to a CSV file
+write.csv(gls_summary_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Duration-Variability_Summary_Results_with_Bonferroni.csv", row.names = FALSE)
+
+gls_summary_df
+
+```
 
 
 
