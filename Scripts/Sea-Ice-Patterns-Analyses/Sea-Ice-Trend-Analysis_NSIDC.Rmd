@@ -19,16 +19,28 @@ library(lubridate)
 
 
 
-**Calculate Sea Ice Extent and Concentration Dataframes**
+**Calculate Sea Ice Extent, Concentration and variability dataframes**
+
+
+This script calculates daily sea ice concentration (SIC), ice extent, and SIC variability from a raster stack of sea ice data for each day, and stores these metrics in a primary dataframe. It then filters the data for winter months (June-September) and calculates monthly variability metrics (standard deviation) for SIC and ice extent, which are stored in a separate dataframe. The script outputs both daily and monthly metrics to CSV and RDS files for further analysis. This allows for detailed daily and summarized monthly analysis of sea ice conditions within the study area.
+
+
+Structure
+    First Dataframe:
+      1. Daily Sea Ice Concentration
+      2. Daily Sea Ice Concentration variability (sd) (within individual raster layers)
+      3. Daily Sea Ice Extent
+    Second Dataframe:
+      1. Average Monthly Sea Ice Concentration Variability (among rasters) 
+      2. Average Monthly Sea Ice Extent variability
 
 ```{r Calculate Regional Ice Extent Metrics}
-
-# Load required libraries
+  # Load required libraries
 library(terra)
 library(dplyr)
 library(lubridate)
 
-# Function to calculate mean SIC and sea ice extent for a given raster stack
+# Function to calculate mean SIC, sea ice extent, and SIC variability for a given raster stack
 calculate_stack_stats <- function(file_path) {
   # Load the raster stack from file
   raster_stack <- rast(file_path)
@@ -36,18 +48,8 @@ calculate_stack_stats <- function(file_path) {
   # Extract dates from the raster stack
   layer_dates <- as.numeric(time(raster_stack))
   
-  # Debugging: Print the extracted dates
-  cat("Extracted dates from raster stack (raw):", layer_dates, "\n")
-  
   # Convert numeric dates to Date type
   layer_dates <- as.Date(layer_dates, origin = "1970-01-01")
-  
-  # Debugging: Print the extracted dates after conversion
-  cat("Extracted dates from raster stack (converted):", layer_dates, "\n")
-  
-  # Print the structure of the raster stack for debugging
-  cat("Structure of raster stack for file:", file_path, "\n")
-  print(raster_stack)
   
   # Apply function to set all values < 0.15 to 0
   raster_stack <- app(raster_stack, fun = function(x) { x[x < 0.15] <- 0; return(x) })
@@ -62,11 +64,159 @@ calculate_stack_stats <- function(file_path) {
   valid_ice_cells <- global(raster_stack >= 0.15, fun = 'sum', na.rm = TRUE)[, 1]
   total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6  # Convert total ice area to square kilometers
   
+  # Calculate SIC variability (standard deviation of SIC) for each layer
+  sic_sd <- global(raster_stack, fun = 'sd', na.rm = TRUE)[, 1]
+  
   # Extract region name from the file path
   region_name <- tools::file_path_sans_ext(basename(file_path))
   region_name <- sub("NSIDC_25km_Harmonized_", "", region_name)  # Adjust based on actual pattern in filenames
   
-  return(data.frame(date = layer_dates, mean_sic = mean_sic, ice_extent_km = total_ice_area_sq_km, region = region_name))
+  return(data.frame(date = layer_dates, mean_sic = mean_sic, ice_extent_km = total_ice_area_sq_km, 
+                    sic_variability = sic_sd, region = region_name))
+}
+
+# Directory containing the .tif files
+chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif"
+
+# List all .tif files for each region
+chunk_files <- list.files(chunk_dir, pattern = "\\.tif$", full.names = TRUE)
+
+# Initialize an empty dataframe to store the combined daily results
+daily_df <- data.frame()
+
+# Iterate through each .tif file and combine the results into daily_df
+for (file in chunk_files) {
+  cat("Processing file:", file, "\n")
+  
+  # Run the calculate_stack_stats function on the current file
+  result <- calculate_stack_stats(file)
+  
+  # Combine the result into the master dataframe
+  daily_df <- bind_rows(daily_df, result)
+}
+
+# Rename the region "nsidc_12_5km_harmonized_1979-2023" to "Complete Study Area"
+daily_df <- daily_df %>%
+  mutate(region = ifelse(region == "nsidc_12_5km_harmonized_1979-2023", "Complete Study Area", region))
+
+# Rename columns
+daily_df <- daily_df %>%
+  rename(Date = date, Region = region, IceExtent_km = ice_extent_km, MeanSIC = mean_sic, SICVariability = sic_variability)
+
+# If Date is not in Date format, convert it
+if (!inherits(daily_df$Date, "Date")) {
+  daily_df <- daily_df %>%
+    mutate(Date = as.Date(Date, format = "%Y-%m-%d"))
+}
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+daily_df <- daily_df %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Create a separate dataframe for monthly variability
+monthly_variability_df <- daily_df %>%
+  group_by(Year, Month, Region) %>%
+  summarize(MonthlySICVariability = sd(MeanSIC, na.rm = TRUE),
+            MonthlyExtentVariability = sd(IceExtent_km, na.rm = TRUE))
+
+# Save the daily metrics dataframe
+write.csv(daily_df, file = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.csv", row.names = FALSE)
+saveRDS(daily_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
+
+# Save the monthly variability dataframe
+write.csv(monthly_variability_df, file = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics_Monthly_Variability_Metrics.csv", row.names = FALSE)
+saveRDS(monthly_variability_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics_Monthly_Variability_Metrics.rds")
+
+
+```
+
+
+**Calculate Sea Ice Mean Monthly Persistence and Duration and Concentration Dataframes**
+
+
+
+*Persistence*: Measures the number of days within a month where SIC is above the threshold. This is useful to understand how often sea ice conditions are favorable within the specified months.
+
+*Duration*: Measures the longest consecutive period within a month where SIC is above the threshold. This helps in understanding the consistency of sea ice conditions over time.
+
+*Persistence_SD*: Variability in persistence values across the raster cells. Indicates how much the number of favorable sea ice days fluctuates within the month.
+
+*Duration_SD*: Variability in the duration of consecutive favorable sea ice days. Indicates how consistent the longest periods of favorable conditions are within the month.
+
+
+
+```{r}
+# Load required libraries
+library(terra)
+library(dplyr)
+library(lubridate)
+
+# Define the function to calculate persistence and duration for a given raster stack
+calculate_persistence_duration_stats <- function(file_path, ice_threshold = 0.15, winter_months = c(6, 7, 8, 9)) {
+  # Load the raster stack from file
+  raster_stack <- rast(file_path)
+  
+  # Extract dates from the raster stack
+  layer_dates <- as.Date(as.numeric(time(raster_stack)), origin = "1970-01-01")
+  
+  # Filter for winter months (June - September)
+  winter_indices <- which(month(layer_dates) %in% winter_months)
+  winter_raster_stack <- subset(raster_stack, winter_indices)
+  winter_dates <- layer_dates[winter_indices]
+  
+  # Calculate persistence: sum of days with SIC >= threshold for each month
+  calculate_persistence <- function(x, threshold) {
+    sum(x >= threshold, na.rm = TRUE)
+  }
+  
+  # Calculate duration: maximum length of consecutive days with SIC >= threshold for each month
+  calculate_duration <- function(x, threshold) {
+    rle_result <- rle(as.vector(x) >= threshold)
+    max_duration <- ifelse(any(rle_result$values), max(rle_result$lengths[rle_result$values]), 0)
+    return(max_duration)
+  }
+  
+  months <- unique(floor_date(winter_dates, "month"))
+  persistence_list <- vector("list", length(months))
+  duration_list <- vector("list", length(months))
+  persistence_sd_list <- vector("list", length(months))
+  duration_sd_list <- vector("list", length(months))
+  names(persistence_list) <- months
+  names(duration_list) <- months
+  names(persistence_sd_list) <- months
+  names(duration_sd_list) <- months
+  
+  for (month in months) {
+    month_indices <- which(floor_date(winter_dates, "month") == month)
+    month_raster_stack <- subset(winter_raster_stack, month_indices)
+    
+    persistence <- app(month_raster_stack, function(x) calculate_persistence(x, ice_threshold))
+    duration <- app(month_raster_stack, function(x) calculate_duration(x, ice_threshold))
+    
+    persistence_list[[as.character(month)]] <- global(persistence, fun = mean, na.rm = TRUE)[, 1]
+    duration_list[[as.character(month)]] <- global(duration, fun = mean, na.rm = TRUE)[, 1]
+    
+    # Calculate standard deviations
+    persistence_sd_list[[as.character(month)]] <- global(persistence, fun = sd, na.rm = TRUE)[, 1]
+    duration_sd_list[[as.character(month)]] <- global(duration, fun = sd, na.rm = TRUE)[, 1]
+  }
+  
+  # Extract region name from the file path
+  region_name <- tools::file_path_sans_ext(basename(file_path))
+  region_name <- sub("NSIDC_25km_Harmonized_", "", region_name)
+  
+  # Combine results into a dataframe
+  stats_df <- data.frame(
+    Month = as.Date(names(persistence_list)),
+    Persistence = unlist(persistence_list),
+    Persistence_SD = unlist(persistence_sd_list),
+    Mean_Monthly_Duration = unlist(duration_list),
+    Duration_SD = unlist(duration_sd_list),
+    Region = region_name
+  )
+  
+  return(stats_df)
 }
 
 # Directory containing the .tif files
@@ -82,42 +232,868 @@ master_df <- data.frame()
 for (file in chunk_files) {
   cat("Processing file:", file, "\n")
   
-  # Run the calculate_stack_stats function on the current file
-  result <- calculate_stack_stats(file)
+  # Run the calculate_persistence_duration_stats function on the current file
+  result <- calculate_persistence_duration_stats(file)
   
   # Combine the result into the master dataframe
   master_df <- bind_rows(master_df, result)
 }
 
+# Ensure the 'Date' column is in Date format and rename it
+nsidc_metrics <- master_df %>%
+  rename(Date = Month) %>%
+  mutate(Date = as.Date(Date, format = "%Y-%m-%d"))
 
-# Rename the region "nsidc_12_5km_harmonized_1979-2023" to "Complete Study Area"
-master_df <- master_df %>%
-  mutate(region = ifelse(region == "nsidc_12_5km_harmonized_1979-2023", "Complete Study Area", region))
-
-
-# Rename columns
-master_df <- master_df %>%
-  rename(Date = date, Region = region, IceExtent_km = ice_extent_km, MeanSIC = mean_sic)
-
-
-
-# If Date is not in Date format, convert it
-if (!inherits(master_df$Date, "Date")) {
-  master_df <- master_df %>%
-    mutate(Date = as.Date(Date, format = "%Y-%m-%d"))
-}
-
+# Check unique regions
+cat("Unique regions:", unique(nsidc_metrics$Region), "\n")
 
 # Filter for winter months (June - September) and add Year, Month, and Day columns
-master_df <- master_df %>%
+winter_metrics <- nsidc_metrics %>%
   mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
   filter(Month %in% c(6, 7, 8, 9))
 
-# 
-# # Save the master dataframe to a CSV file (optional)
-write.csv(master_df, file = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.csv", row.names = FALSE)
-saveRDS(master_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
-# 
+# Find all instances of NA in the Date column
+na_subset <- nsidc_metrics %>%
+  filter(is.na(Date))
+
+# Find all instances with valid dates
+valid_date_subset <- nsidc_metrics %>%
+  filter(!is.na(Date))
+
+# Check for matching rows between NA and valid date subsets
+matching_rows <- na_subset %>%
+  inner_join(valid_date_subset, by = c("Persistence", "Mean_Monthly_Duration", "Region", "Persistence_SD", "Duration_SD"), suffix = c("_na", "_valid"), relationship = "many-to-many")
+
+# Find unique matches in matching_rows
+unique_matches <- matching_rows %>%
+  distinct(Persistence, Mean_Monthly_Duration, Region, .keep_all = TRUE)
+
+# Print the number of unique matches
+cat("Number of unique matches:", nrow(unique_matches), "\n")
+
+# Check column names in unique_matches
+cat("Column names in unique_matches:", names(unique_matches), "\n")
+
+# Combine the unique matches with the original dataframe excluding the NA rows
+cleaned_metrics <- valid_date_subset %>%
+  bind_rows(unique_matches %>%
+              select(-contains("_na"), Date = Date_valid))
+
+# Check for any remaining NAs in the cleaned dataframe
+remaining_na <- cleaned_metrics %>%
+  filter(is.na(Date))
+
+# Print the number of remaining NAs
+cat("Number of remaining NAs:", nrow(remaining_na), "\n")
+print(remaining_na)
+
+# Ensure the cleaned_metrics does not have duplicated rows
+cleaned_metrics <- cleaned_metrics %>%
+  distinct()
+
+# Print the final cleaned dataframe's structure
+str(cleaned_metrics)
+
+# Rename the region "nsidc_12_5km_harmonized_1979-2023" to "Complete Study Area"
+cleaned_metrics <- cleaned_metrics %>%
+  mutate(Region = ifelse(Region == "nsidc_12_5km_harmonized_1979-2023", "Complete Study Area", Region))
+
+
+# Print the final cleaned dataframe's structure
+str(cleaned_metrics)
+
+# Save the master dataframe to a CSV file (optional)
+write.csv(cleaned_metrics, file = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.csv", row.names = FALSE)
+
+# Save the master dataframe as RDS (optional)
+saveRDS(cleaned_metrics, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds")
+
+
+
+```
+
+
+
+This script fits Generalized Least Squares (GLS) models to analyze trends in sea ice extent over time for different regions and months during the winter period (June - September). It performs model diagnostics including residual vs. fitted plots, Q-Q plots, autocorrelation function (ACF) plots, the Breusch-Pagan test for heteroscedasticity, and the Shapiro-Wilk test for normality of residuals to ensure the assumptions of the models are met and to identify any potential issues.
+
+
+
+
+
+
+
+
+
+
+**Analysis - Sea Ice Extent**
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(nlme)
+library(wesanderson)
+library(scales)
+library(lmtest) # For Breusch-Pagan test
+library(nortest) # For Shapiro-Wilk test
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Calculate monthly averages of ice extent for each region
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup()
+
+# Create a time variable for trend analysis
+monthly_averages <- monthly_averages %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+
+# Define a function to fit a GLS model for a given region and month
+fit_gls_model <- function(region_data) {
+  gls_model <- gls(mean_extent ~ Time, correlation = corAR1(), data = region_data)
+  return(gls_model)
+}
+
+# Apply the model for each unique region and month combination and store the results
+regions <- unique(monthly_averages$Region)
+months <- unique(monthly_averages$Month)
+gls_results <- list()
+
+for (region in regions) {
+  for (month in months) {
+    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
+    if (nrow(region_month_data) > 1) {
+      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
+    }
+  }
+}
+
+# Run GLS model for annual (June-September) metrics
+annual_metrics <- winter_metrics %>%
+  group_by(Year, Region) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup() %>%
+  mutate(Time = as.numeric(Year))
+
+for (region in regions) {
+  region_annual_data <- annual_metrics %>% filter(Region == region)
+  if (nrow(region_annual_data) > 1) {
+    gls_results[[paste(region, "Annual", sep = "_")]] <- fit_gls_model(region_annual_data)
+  }
+}
+
+# Initialize a dataframe to store the GLS results
+gls_summary_df <- data.frame(
+  Region = character(),
+  Metric = character(),
+  Month = character(),
+  Intercept_Estimate = numeric(),
+  Intercept_StdError = numeric(),
+  Intercept_tValue = numeric(),
+  Intercept_pValue = numeric(),
+  Time_Estimate = numeric(),
+  Time_StdError = numeric(),
+  Time_tValue = numeric(),
+  Time_pValue = numeric(),
+  Adjusted_Time_pValue = numeric(),
+  AIC = numeric(),
+  BIC = numeric(),
+  LogLik = numeric(),
+  Residual_StdError = numeric(),
+  DF_Residual = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Extract and organize GLS model results
+for (key in names(gls_results)) {
+  model <- gls_results[[key]]
+  summary_model <- summary(model)
+  
+  # Extract coefficients
+  coefficients <- summary_model$tTable
+  intercept_estimate <- coefficients["(Intercept)", "Value"]
+  intercept_std_error <- coefficients["(Intercept)", "Std.Error"]
+  intercept_t_value <- coefficients["(Intercept)", "t-value"]
+  intercept_p_value <- coefficients["(Intercept)", "p-value"]
+  
+  time_estimate <- coefficients["Time", "Value"]
+  time_std_error <- coefficients["Time", "Std.Error"]
+  time_t_value <- coefficients["Time", "t-value"]
+  time_p_value <- coefficients["Time", "p-value"]
+  
+  # Bonferroni correction for multiple comparisons
+  num_tests <- length(gls_results)
+  adjusted_time_p_value <- p.adjust(time_p_value, method = "bonferroni", n = num_tests)
+  
+  # Extract other statistics
+  aic <- AIC(model)
+  bic <- BIC(model)
+  log_lik <- logLik(model)
+  residual_std_error <- summary_model$sigma
+  df_residual <- summary_model$dims$N - summary_model$dims$p
+  
+  # Split key to get region and month
+  key_split <- unlist(strsplit(key, "_"))
+  region <- key_split[1]
+  month <- ifelse(length(key_split) > 1, key_split[2], "Annual")
+  
+  # Append to dataframe
+  gls_summary_df <- rbind(gls_summary_df, data.frame(
+    Region = region,
+    Metric = "IceExtent_km",
+    Month = month,
+    Intercept_Estimate = intercept_estimate,
+    Intercept_StdError = intercept_std_error,
+    Intercept_tValue = intercept_t_value,
+    Intercept_pValue = intercept_p_value,
+    Time_Estimate = time_estimate,
+    Time_StdError = time_std_error,
+    Time_tValue = time_t_value,
+    Time_pValue = time_p_value,
+    Adjusted_Time_pValue = adjusted_time_p_value,
+    AIC = aic,
+    BIC = bic,
+    LogLik = log_lik,
+    Residual_StdError = residual_std_error,
+    DF_Residual = df_residual
+  ))
+}
+
+# Save the organized GLS summary dataframe to a CSV file
+# write.csv(gls_summary_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/GLS_Summary_Results_with_Bonferroni.csv", row.names = FALSE)
+
+# Optional: View the organized GLS summary dataframe
+gls_summary_df
+
+
+
+```
+**Analysis - Mean Monthly Sea Ice Concentration**
+
+
+```{r}
+
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(nlme)
+library(wesanderson)
+library(scales)
+library(lmtest) # For Breusch-Pagan test
+library(nortest) # For Shapiro-Wilk test
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Calculate monthly averages of ice extent for each region
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(mean_sic = mean(MeanSIC, na.rm = TRUE), 
+            sd_sic = sd(MeanSIC, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup()
+
+# Create a time variable for trend analysis
+monthly_averages <- monthly_averages %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+
+# Define a function to fit a GLS model for a given region and month
+fit_gls_model <- function(region_data) {
+  gls_model <- gls(mean_sic ~ Time, correlation = corAR1(), data = region_data)
+  return(gls_model)
+}
+
+# Apply the model for each unique region and month combination and store the results
+regions <- unique(monthly_averages$Region)
+months <- unique(monthly_averages$Month)
+gls_results <- list()
+
+for (region in regions) {
+  for (month in months) {
+    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
+    if (nrow(region_month_data) > 1) {
+      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
+    }
+  }
+}
+
+# Run GLS model for annual (June-September) metrics
+annual_metrics <- winter_metrics %>%
+  group_by(Year, Region) %>%
+  summarise(mean_sic = mean(MeanSIC, na.rm = TRUE), 
+            sd_sic = sd(MeanSIC, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup() %>%
+  mutate(Time = as.numeric(Year))
+
+for (region in regions) {
+  region_annual_data <- annual_metrics %>% filter(Region == region)
+  if (nrow(region_annual_data) > 1) {
+    gls_results[[paste(region, "Annual", sep = "_")]] <- fit_gls_model(region_annual_data)
+  }
+}
+
+# Initialize a dataframe to store the GLS results
+gls_summary_df <- data.frame(
+  Region = character(),
+  Metric = character(),
+  Month = character(),
+  Intercept_Estimate = numeric(),
+  Intercept_StdError = numeric(),
+  Intercept_tValue = numeric(),
+  Intercept_pValue = numeric(),
+  Time_Estimate = numeric(),
+  Time_StdError = numeric(),
+  Time_tValue = numeric(),
+  Time_pValue = numeric(),
+  Adjusted_Time_pValue = numeric(),
+  AIC = numeric(),
+  BIC = numeric(),
+  LogLik = numeric(),
+  Residual_StdError = numeric(),
+  DF_Residual = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Extract and organize GLS model results
+for (key in names(gls_results)) {
+  model <- gls_results[[key]]
+  summary_model <- summary(model)
+  
+  # Extract coefficients
+  coefficients <- summary_model$tTable
+  intercept_estimate <- coefficients["(Intercept)", "Value"]
+  intercept_std_error <- coefficients["(Intercept)", "Std.Error"]
+  intercept_t_value <- coefficients["(Intercept)", "t-value"]
+  intercept_p_value <- coefficients["(Intercept)", "p-value"]
+  
+  time_estimate <- coefficients["Time", "Value"]
+  time_std_error <- coefficients["Time", "Std.Error"]
+  time_t_value <- coefficients["Time", "t-value"]
+  time_p_value <- coefficients["Time", "p-value"]
+  
+  # Bonferroni correction for multiple comparisons
+  num_tests <- length(gls_results)
+  adjusted_time_p_value <- p.adjust(time_p_value, method = "bonferroni", n = num_tests)
+  
+  # Extract other statistics
+  aic <- AIC(model)
+  bic <- BIC(model)
+  log_lik <- logLik(model)
+  residual_std_error <- summary_model$sigma
+  df_residual <- summary_model$dims$N - summary_model$dims$p
+  
+  # Split key to get region and month
+  key_split <- unlist(strsplit(key, "_"))
+  region <- key_split[1]
+  month <- ifelse(length(key_split) > 1, key_split[2], "Annual")
+  
+  # Append to dataframe
+  gls_summary_df <- rbind(gls_summary_df, data.frame(
+    Region = region,
+    Metric = "Mean_SIC",
+    Month = month,
+    Intercept_Estimate = intercept_estimate,
+    Intercept_StdError = intercept_std_error,
+    Intercept_tValue = intercept_t_value,
+    Intercept_pValue = intercept_p_value,
+    Time_Estimate = time_estimate,
+    Time_StdError = time_std_error,
+    Time_tValue = time_t_value,
+    Time_pValue = time_p_value,
+    Adjusted_Time_pValue = adjusted_time_p_value,
+    AIC = aic,
+    BIC = bic,
+    LogLik = log_lik,
+    Residual_StdError = residual_std_error,
+    DF_Residual = df_residual
+  ))
+}
+
+# Save the organized GLS summary dataframe to a CSV file
+write.csv(gls_summary_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/SIC-Mean_Summary_Results_with_Bonferroni.csv", row.names = FALSE)
+
+# Optional: View the organized GLS summary dataframe
+gls_summary_df
+
+```
+
+**Analysis - Variability of Mean Monthly Sea Ice Concentration **
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(nlme)
+library(wesanderson)
+library(scales)
+library(lmtest) # For Breusch-Pagan test
+library(nortest) # For Shapiro-Wilk test
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Calculate monthly averages of ice extent for each region
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(mean_sic_var  = mean(SICVariability, na.rm = TRUE), 
+            mean_sic_var_sd = sd(SICVariability, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup()
+
+# Create a time variable for trend analysis
+monthly_averages <- monthly_averages %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+
+# Define a function to fit a GLS model for a given region and month
+fit_gls_model <- function(region_data) {
+  gls_model <- gls(mean_sic_var ~ Time, correlation = corAR1(), data = region_data)
+  return(gls_model)
+}
+
+# Apply the model for each unique region and month combination and store the results
+regions <- unique(monthly_averages$Region)
+months <- unique(monthly_averages$Month)
+gls_results <- list()
+
+for (region in regions) {
+  for (month in months) {
+    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
+    if (nrow(region_month_data) > 1) {
+      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
+    }
+  }
+}
+
+# Run GLS model for annual (June-September) metrics
+annual_metrics <- winter_metrics %>%
+  group_by(Year, Region) %>%
+  summarise(mean_sic_var = mean(SICVariability, na.rm = TRUE), 
+            mean_sic_var_sd = sd(SICVariability, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup() %>%
+  mutate(Time = as.numeric(Year))
+
+for (region in regions) {
+  region_annual_data <- annual_metrics %>% filter(Region == region)
+  if (nrow(region_annual_data) > 1) {
+    gls_results[[paste(region, "Annual", sep = "_")]] <- fit_gls_model(region_annual_data)
+  }
+}
+
+# Initialize a dataframe to store the GLS results
+gls_summary_df <- data.frame(
+  Region = character(),
+  Metric = character(),
+  Month = character(),
+  Intercept_Estimate = numeric(),
+  Intercept_StdError = numeric(),
+  Intercept_tValue = numeric(),
+  Intercept_pValue = numeric(),
+  Time_Estimate = numeric(),
+  Time_StdError = numeric(),
+  Time_tValue = numeric(),
+  Time_pValue = numeric(),
+  Adjusted_Time_pValue = numeric(),
+  AIC = numeric(),
+  BIC = numeric(),
+  LogLik = numeric(),
+  Residual_StdError = numeric(),
+  DF_Residual = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Extract and organize GLS model results
+for (key in names(gls_results)) {
+  model <- gls_results[[key]]
+  summary_model <- summary(model)
+  
+  # Extract coefficients
+  coefficients <- summary_model$tTable
+  intercept_estimate <- coefficients["(Intercept)", "Value"]
+  intercept_std_error <- coefficients["(Intercept)", "Std.Error"]
+  intercept_t_value <- coefficients["(Intercept)", "t-value"]
+  intercept_p_value <- coefficients["(Intercept)", "p-value"]
+  
+  time_estimate <- coefficients["Time", "Value"]
+  time_std_error <- coefficients["Time", "Std.Error"]
+  time_t_value <- coefficients["Time", "t-value"]
+  time_p_value <- coefficients["Time", "p-value"]
+  
+  # Bonferroni correction for multiple comparisons
+  num_tests <- length(gls_results)
+  adjusted_time_p_value <- p.adjust(time_p_value, method = "bonferroni", n = num_tests)
+  
+  # Extract other statistics
+  aic <- AIC(model)
+  bic <- BIC(model)
+  log_lik <- logLik(model)
+  residual_std_error <- summary_model$sigma
+  df_residual <- summary_model$dims$N - summary_model$dims$p
+  
+  # Split key to get region and month
+  key_split <- unlist(strsplit(key, "_"))
+  region <- key_split[1]
+  month <- ifelse(length(key_split) > 1, key_split[2], "Annual")
+  
+  # Append to dataframe
+  gls_summary_df <- rbind(gls_summary_df, data.frame(
+    Region = region,
+    Metric = "Mean_SIC_Variability",
+    Month = month,
+    Intercept_Estimate = intercept_estimate,
+    Intercept_StdError = intercept_std_error,
+    Intercept_tValue = intercept_t_value,
+    Intercept_pValue = intercept_p_value,
+    Time_Estimate = time_estimate,
+    Time_StdError = time_std_error,
+    Time_tValue = time_t_value,
+    Time_pValue = time_p_value,
+    Adjusted_Time_pValue = adjusted_time_p_value,
+    AIC = aic,
+    BIC = bic,
+    LogLik = log_lik,
+    Residual_StdError = residual_std_error,
+    DF_Residual = df_residual
+  ))
+}
+
+# Save the organized GLS summary dataframe to a CSV file
+write.csv(gls_summary_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/SIC-Variability_Mean_Summary_Results_with_Bonferroni.csv", row.names = FALSE)
+
+# Optional: View the organized GLS summary dataframe
+gls_summary_df
+
+```
+
+
+**Duration + Persistence + SD  Analysis**
+
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(nlme)
+library(ggplot2)
+library(wesanderson)
+library(scales)
+library(lmtest) # For Breusch-Pagan test
+library(nortest) # For Shapiro-Wilk test
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds")
+
+# Rename the region "nsidc_12_5km_harmonized_1979-2023" to "Complete Study Area"
+nsidc_metrics <- nsidc_metrics %>%
+  mutate(Region = ifelse(Region == "nsidc_12_5km_harmonized_1979-2023", "Complete Study Area", Region))
+
+# Rename columns
+nsidc_metrics <- nsidc_metrics %>%
+  rename(
+    Mean_Monthly_Persistence = Persistence,
+    Mean_Monthly_Duration = Mean_Monthly_Duration,
+    Persistence_SD = Persistence_SD,
+    Duration_SD = Duration_SD
+  )
+
+# If Date is not in Date format, convert it
+if (!inherits(nsidc_metrics$Date, "Date")) {
+  nsidc_metrics <- nsidc_metrics %>%
+    mutate(Date = as.Date(Date, format = "%Y-%m-%d"))
+}
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+nsidc_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Create a time variable for trend analysis
+nsidc_metrics <- nsidc_metrics %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12)
+
+# Function to fit a GLS model for a given region and metric
+fit_gls_model <- function(region_data, response_var) {
+  formula <- as.formula(paste(response_var, "~ Time"))
+  gls_model <- gls(formula, correlation = corAR1(), data = region_data)
+  return(gls_model)
+}
+
+# Function to apply the GLS model and store results
+apply_gls_model <- function(data, regions, metrics, period_label) {
+  gls_results <- list()
+  for (region in regions) {
+    for (metric in metrics) {
+      region_data <- data %>% filter(Region == region)
+      if (nrow(region_data) > 1) {
+        gls_results[[paste(region, metric, period_label, sep = "_")]] <- fit_gls_model(region_data, metric)
+      }
+    }
+  }
+  return(gls_results)
+}
+
+# Define regions and metrics
+regions <- unique(nsidc_metrics$Region)
+metrics <- c("Mean_Monthly_Persistence", "Persistence_SD", "Mean_Monthly_Duration", "Duration_SD")
+
+# Apply the model for the winter period (June-September)
+winter_gls_results <- apply_gls_model(nsidc_metrics, regions, metrics, "Winter")
+
+# Apply the model for each month separately
+monthly_gls_results <- list()
+for (month in 6:9) {
+  monthly_data <- nsidc_metrics %>% filter(Month == month)
+  month_label <- month.name[month]
+  monthly_gls_results[[month_label]] <- apply_gls_model(monthly_data, regions, metrics, month_label)
+}
+
+# Combine results
+all_gls_results <- c(winter_gls_results, unlist(monthly_gls_results, recursive = FALSE))
+
+# Function to extract summary information from GLS model
+extract_gls_summary <- function(model, region, metric, period) {
+  summary_model <- summary(model)
+  coef_table <- summary_model$tTable
+  intercept <- coef_table[1, ]
+  time_coef <- coef_table[2, ]
+  
+  return(data.frame(
+    Region = region,
+    Metric = metric,
+    Period = period,
+    Intercept_Estimate = intercept["Value"],
+    Intercept_StdError = intercept["Std.Error"],
+    Intercept_tValue = intercept["t-value"],
+    Intercept_pValue = intercept["p-value"],
+    Time_Estimate = time_coef["Value"],
+    Time_StdError = time_coef["Std.Error"],
+    Time_tValue = time_coef["t-value"],
+    Time_pValue = time_coef["p-value"],
+    AIC = AIC(model),
+    BIC = BIC(model),
+    LogLik = logLik(model)[1],
+    Residual_StdError = summary_model$sigma,
+    DF_Residual = summary_model$dims$N - summary_model$dims$p
+  ))
+}
+
+# Extract summaries for all models
+gls_summary_df <- do.call(rbind, lapply(names(all_gls_results), function(key) {
+  parts <- unlist(strsplit(key, "_"))
+  region <- parts[1]
+  metric <- parts[2]
+  period <- parts[3]
+  model <- all_gls_results[[key]]
+  extract_gls_summary(model, region, metric, period)
+}))
+
+# Save the summary dataframe
+write.csv(gls_summary_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence-and-Duration-GLS_Model_Summaries.csv", row.names = FALSE)
+saveRDS(gls_summary_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence-and-Duration-GLS_Model_Summaries.rds")
+
+# Print the first few rows of the summary dataframe
+print(head(gls_summary_df))
+
+
+
+```
+
+
+
+
+
+**Southern Oscillation Index Analysis**
+
+```{r}
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(httr)
+library(tidyr)
+library(broom)
+library(gridExtra)
+library(RColorBrewer)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
+
+# Filter for winter months (June - September) and add Year, Month, and Day columns
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+# Calculate monthly averages of ice extent for each region
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
+  ungroup()
+
+# Create a time variable for trend analysis
+monthly_averages <- monthly_averages %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+
+# Load SOI data
+url <- "https://www.cpc.ncep.noaa.gov/data/indices/soi"
+soi_raw <- GET(url)
+soi_text <- content(soi_raw, "text")
+
+# Preprocess the SOI data
+soi_lines <- strsplit(soi_text, "\n")[[1]]
+
+# Identify the start of the standardized SOI data section
+standardized_soi_start <- grep("STANDARDIZED    DATA", soi_lines)
+
+# Extract standardized SOI data lines
+soi_standardized_lines <- soi_lines[(standardized_soi_start + 3):length(soi_lines)]
+soi_standardized_lines <- soi_standardized_lines[!grepl("-999.9", soi_standardized_lines)] # remove lines with invalid data
+
+# Convert standardized SOI data to dataframe
+soi_data <- read.table(text = soi_standardized_lines, fill = TRUE, stringsAsFactors = FALSE)
+colnames(soi_data) <- c("Year", month.abb)
+soi_data <- soi_data %>% mutate(Year = as.integer(Year))
+
+# Convert to long format
+soi_data_long <- soi_data %>%
+  pivot_longer(-Year, names_to = "Month", values_to = "SOI") %>%
+  mutate(Month = match(Month, month.abb), 
+         Year = as.integer(Year),
+         SOI = as.numeric(SOI)) %>%
+  filter(!is.na(SOI))  # Remove rows with NA values in SOI
+
+# Merge sea ice data with SOI data
+merged_data <- merge(monthly_averages, soi_data_long, by = c("Year", "Month"))
+
+# Remove duplicate rows
+merged_data <- merged_data[!duplicated(merged_data), ]
+
+# Calculate correlation for each region and month
+correlation_results <- merged_data %>%
+  group_by(Region, Month) %>%
+  summarize(correlation = cor(mean_extent, SOI, use = "complete.obs"),
+            p.value = cor.test(mean_extent, SOI)$p.value) %>%
+  arrange(Region, Month)
+
+# Print the correlation results
+print(correlation_results)
+
+
+
+
+# Visualize the correlation results using RColorBrewer color palette
+ggplot(correlation_results, aes(x = factor(Month, levels = 6:9), y = correlation, fill = Region)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9)) +
+  geom_text(aes(label = round(correlation, 2)), vjust = -1.5, position = position_dodge(0.9)) +
+  scale_fill_brewer(palette = "Set3") +  # You can choose other palettes like "Paired", "Dark2", etc.
+  labs(title = "Correlation between SOI and Sea Ice Extent by Region and Month",
+       x = "Month", y = "Correlation") +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    legend.position = "bottom"
+  )
+
+
+
+
+# Linear regression analysis to quantify the relationship between SOI and sea ice extent
+regression_results <- merged_data %>%
+  group_by(Region, Month) %>%
+  do(tidy(lm(mean_extent ~ SOI, data = .)))
+
+# Print regression results
+print(regression_results)
+
+# Filter the regression results for the SOI term
+soi_coefficients <- regression_results %>%
+  filter(term == "SOI")
+
+# Function to create a plot for each region
+plot_soi_effect <- function(region_data) {
+  ggplot(region_data, aes(x = factor(Month), y = estimate, color = factor(Month))) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+    labs(
+      title = paste("Effect of SOI on Sea Ice Extent:", unique(region_data$Region)),
+      x = "Month",
+      y = "SOI Coefficient Estimate",
+      color = "Month"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(hjust = 0.5),
+      legend.position = "none"
+    )
+}
+
+# Apply the function for each region and plot
+unique_regions <- unique(soi_coefficients$Region)
+plots <- lapply(unique_regions, function(region) {
+  region_data <- soi_coefficients %>% filter(Region == region)
+  plot_soi_effect(region_data)
+})
+
+# Display the plots
+do.call(grid.arrange, c(plots, ncol = 2))
+
+# # Create a combined plot showing the SOI coefficients for all regions and months
+# ggplot(soi_coefficients, aes(x = factor(Month), y = estimate, color = Region)) +
+#   geom_point(size = 3) +
+#   geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+#   geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+#   labs(
+#     title = "Effect of SOI on Sea Ice Extent Across Regions and Months",
+#     x = "Month",
+#     y = "SOI Coefficient Estimate",
+#     color = "Region"
+#   ) +
+#   theme_minimal() +
+#   theme(
+#     plot.title = element_text(hjust = 0.5)
+  # )
+
+# Create individual plots for each region and arrange them using facet_wrap
+ggplot(soi_coefficients, aes(x = factor(Month), y = estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  facet_wrap(~ Region, scales = "free_y") +
+  labs(
+    title = "Effect of SOI on Sea Ice Extent Across Regions and Months",
+    x = "Month",
+    y = "SOI Coefficient Estimate"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+
 
 ```
 
@@ -126,7 +1102,8 @@ saveRDS(master_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harm
 
 
 
-**Duration and Persistence + Trend analayis - Basic lm**
+
+**Duration and Persistence + Trend analayis - Basic glm**
 
 
  
@@ -506,409 +1483,4 @@ analyze_sea_ice <- function(start_year, end_year, use_mask = TRUE, report_metric
 analyze_sea_ice(start_year = 1981, end_year = 2023, use_mask = FALSE, report_metrics = c("concentration", "duration", "persistence"))
 
 ```
-
-
-
-
-
-
-
-
-
-**Extent Analysis: Generalized Least Squares**
-
-
-```{r}
-# Load necessary libraries
-library(dplyr)
-library(lubridate)
-library(ggplot2)
-library(nlme)
-library(wesanderson)
-library(scales)
-library(lmtest) # For Breusch-Pagan test
-library(nortest) # For Shapiro-Wilk test
-
-# Load your dataset
-nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
-
-# Filter for winter months (June - September) and add Year, Month, and Day columns
-winter_metrics <- nsidc_metrics %>%
-  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
-  filter(Month %in% c(6, 7, 8, 9))
-
-# Calculate monthly averages of ice extent for each region
-monthly_averages <- winter_metrics %>%
-  group_by(Year, Month, Region) %>%
-  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
-            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
-  ungroup()
-
-# Create a time variable for trend analysis
-monthly_averages <- monthly_averages %>%
-  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
-         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
-
-# Define a function to fit a GLS model for a given region and month
-fit_gls_model <- function(region_data) {
-  gls_model <- gls(mean_extent ~ Time, correlation = corAR1(), data = region_data)
-  return(gls_model)
-}
-
-# Apply the model for each unique region and month combination and store the results
-regions <- unique(monthly_averages$Region)
-months <- unique(monthly_averages$Month)
-gls_results <- list()
-
-for (region in regions) {
-  for (month in months) {
-    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
-    if (nrow(region_month_data) > 1) {
-      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
-    }
-  }
-}
-
-# Diagnostic plots and tests
-for (key in names(gls_results)) {
-  cat("Region and Month:", key, "\n")
-  
-  model <- gls_results[[key]]
-  summary_model <- summary(model)
-  print(summary_model)
-  
-  # Residuals
-  residuals <- residuals(model, type = "normalized")
-  fitted_values <- fitted(model)
-  
-  # Residual vs Fitted Plot
-  plot(fitted_values, residuals, main = paste("Residuals vs Fitted for", key),
-       xlab = "Fitted values", ylab = "Residuals")
-  abline(h = 0, col = "red")
-  
-  # Q-Q Plot of Residuals
-  qqnorm(residuals, main = paste("Q-Q Plot for", key))
-  qqline(residuals, col = "red")
-  
-  # Autocorrelation Function Plot
-  acf(residuals, main = paste("ACF of Residuals for", key))
-  
-  # Breusch-Pagan Test for Heteroscedasticity
-  bp_test <- bptest(mean_extent ~ Time, data = region_month_data)
-  print(bp_test)
-  
-  # Shapiro-Wilk Test for Normality of Residuals
-  sw_test <- shapiro.test(residuals)
-  print(sw_test)
-  
-  cat("\n")
-}
-
-```
-
-
-
-
-
-**Concentration Analysis - Generalized Least Squares**
-
-```{r}
-# Load necessary libraries
-library(dplyr)
-library(lubridate)
-library(ggplot2)
-library(nlme)
-library(wesanderson)
-library(scales)
-
-# Load your dataset
-nsidc_metrics <-readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
-
-str(nsidc_metrics)
-
-str(nsidc_metrics)
-# Filter for winter months (June - September) and add Year, Month, and Day columns
-winter_metrics <- nsidc_metrics %>%
-  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
-  filter(Month %in% c(6, 7, 8, 9))
-
-# Calculate monthly averages of sea ice concentration for each region
-monthly_averages <- winter_metrics %>%
-  group_by(Year, Month, Region) %>%
-  summarise(mean_concentration = mean(MeanSIC, na.rm = TRUE), 
-            sd_concentration = sd(MeanSIC, na.rm = TRUE), .groups = 'drop') %>%
-  ungroup()
-
-# Create a time variable for trend analysis
-monthly_averages <- monthly_averages %>%
-  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
-         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
-
-# Define a function to fit a GLS model for a given region and month
-fit_gls_model <- function(region_data) {
-  gls_model <- gls(mean_concentration ~ Time, correlation = corAR1(), data = region_data)
-  return(gls_model)
-}
-
-# Apply the model for each unique region and month combination and store the results
-regions <- unique(monthly_averages$Region)
-months <- unique(monthly_averages$Month)
-gls_results <- list()
-
-for (region in regions) {
-  for (month in months) {
-    region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
-    if (nrow(region_month_data) > 1) {
-      gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
-    }
-  }
-}
-
-# Display summary of the GLS model for each region and month
-for (key in names(gls_results)) {
-  cat("Region and Month:", key, "\n")
-  print(summary(gls_results[[key]]))
-  cat("\n")
-}
-
-# Directory to save the plots
-output_directory <- "D:/Manuscripts_localData/FrostBound_AQ/Results/gls_trends"
-dir.create(output_directory, recursive = TRUE, showWarnings = FALSE)
-
-# Color settings
-sd_color <- "#7AB8BF"  # Light red color 
-axis_color <- "gray70"  # Light gray color for the axis lines
-
-# Visualize the trend for each region and save the plots
-for (region in regions) {
-  region_data <- monthly_averages %>% filter(Region == region)
-  
-  p <- region_data %>%
-    ggplot(aes(x = Year, y = mean_concentration)) +
-    geom_errorbar(aes(ymin = mean_concentration - sd_concentration, ymax = mean_concentration + sd_concentration), 
-                  width = 0.2, color = sd_color) +
-    geom_point(color = "black") +
-    geom_smooth(method = "lm", color = "blue", se = FALSE) +
-    facet_wrap(~month2, scales = "fixed", ncol = 3) +
-    xlab(NULL) +
-    ylab("Mean Sea Ice Concentration (%)") +
-    labs(
-      title = sprintf(
-        "%s: Sea ice concentration between %d and %d",
-        region,
-        min(region_data$Year),
-        max(region_data$Year)
-      ),
-      subtitle = "The vertical bar at each point shows the standard deviation around the mean. The blue line represents the linear trend.",
-      caption = "Source: NSIDC 25km Sea Ice Index dataset"
-    ) +
-    theme(
-      plot.caption = element_text(size = 8, color = "black"),
-      plot.margin = unit(c(5.5, 10, 5.5, 5.5), "points"),
-      panel.background = element_rect(fill = "white"),
-      strip.background = element_rect(fill = "white"),
-      strip.text = element_text(colour = "black", size = 12, face = "bold"),
-      panel.grid = element_blank(),
-      axis.line = element_line(color = axis_color),
-      legend.position = "none"
-    )
-  
-  # Save the plot
-  ggsave(filename = paste(output_directory, paste("25km_Concentration_trend_plot_", region, ".png", sep = ""), sep = "/"), plot = p)
-  
-  # Save the plot as EPS
-  ggsave(filename = paste(output_directory, paste("25km_Concentration_trend_plot_", region, ".eps", sep = ""), sep = "/"), plot = p, device = "eps")
-}
-
-# Extract and print coefficients and p-values for each region and month
-coefficients_gls <- lapply(gls_results, function(model) summary(model)$tTable)
-names(coefficients_gls) <- names(gls_results)
-
-# Print coefficients and p-values
-for (key in names(coefficients_gls)) {
-  cat("Region and Month:", key, "\n")
-  print(coefficients_gls[[key]])
-  cat("\n")
-}
-
-
-```
-
-
-**Southern Oscillation Index Analysis**
-
-```{r}
-# Load necessary libraries
-library(dplyr)
-library(lubridate)
-library(ggplot2)
-library(httr)
-library(tidyr)
-library(broom)
-library(gridExtra)
-library(RColorBrewer)
-
-# Load your dataset
-nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
-
-# Filter for winter months (June - September) and add Year, Month, and Day columns
-winter_metrics <- nsidc_metrics %>%
-  mutate(Year = year(Date), Month = month(Date), Day = day(Date)) %>%
-  filter(Month %in% c(6, 7, 8, 9))
-
-# Calculate monthly averages of ice extent for each region
-monthly_averages <- winter_metrics %>%
-  group_by(Year, Month, Region) %>%
-  summarise(mean_extent = mean(IceExtent_km, na.rm = TRUE), 
-            sd_extent = sd(IceExtent_km, na.rm = TRUE), .groups = 'drop') %>%
-  ungroup()
-
-# Create a time variable for trend analysis
-monthly_averages <- monthly_averages %>%
-  mutate(Time = as.numeric(Year) + (Month - 1) / 12,
-         month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
-
-# Load SOI data
-url <- "https://www.cpc.ncep.noaa.gov/data/indices/soi"
-soi_raw <- GET(url)
-soi_text <- content(soi_raw, "text")
-
-# Preprocess the SOI data
-soi_lines <- strsplit(soi_text, "\n")[[1]]
-
-# Identify the start of the standardized SOI data section
-standardized_soi_start <- grep("STANDARDIZED    DATA", soi_lines)
-
-# Extract standardized SOI data lines
-soi_standardized_lines <- soi_lines[(standardized_soi_start + 3):length(soi_lines)]
-soi_standardized_lines <- soi_standardized_lines[!grepl("-999.9", soi_standardized_lines)] # remove lines with invalid data
-
-# Convert standardized SOI data to dataframe
-soi_data <- read.table(text = soi_standardized_lines, fill = TRUE, stringsAsFactors = FALSE)
-colnames(soi_data) <- c("Year", month.abb)
-soi_data <- soi_data %>% mutate(Year = as.integer(Year))
-
-# Convert to long format
-soi_data_long <- soi_data %>%
-  pivot_longer(-Year, names_to = "Month", values_to = "SOI") %>%
-  mutate(Month = match(Month, month.abb), 
-         Year = as.integer(Year),
-         SOI = as.numeric(SOI)) %>%
-  filter(!is.na(SOI))  # Remove rows with NA values in SOI
-
-# Merge sea ice data with SOI data
-merged_data <- merge(monthly_averages, soi_data_long, by = c("Year", "Month"))
-
-# Remove duplicate rows
-merged_data <- merged_data[!duplicated(merged_data), ]
-
-# Calculate correlation for each region and month
-correlation_results <- merged_data %>%
-  group_by(Region, Month) %>%
-  summarize(correlation = cor(mean_extent, SOI, use = "complete.obs"),
-            p.value = cor.test(mean_extent, SOI)$p.value) %>%
-  arrange(Region, Month)
-
-# Print the correlation results
-print(correlation_results)
-
-
-
-
-# Visualize the correlation results using RColorBrewer color palette
-ggplot(correlation_results, aes(x = factor(Month, levels = 6:9), y = correlation, fill = Region)) +
-  geom_bar(stat = "identity", position = position_dodge(0.9)) +
-  geom_text(aes(label = round(correlation, 2)), vjust = -1.5, position = position_dodge(0.9)) +
-  scale_fill_brewer(palette = "Set3") +  # You can choose other palettes like "Paired", "Dark2", etc.
-  labs(title = "Correlation between SOI and Sea Ice Extent by Region and Month",
-       x = "Month", y = "Correlation") +
-  theme_minimal() +
-  theme(
-    plot.title = element_text(hjust = 0.5),
-    legend.position = "bottom"
-  )
-
-
-
-
-# Linear regression analysis to quantify the relationship between SOI and sea ice extent
-regression_results <- merged_data %>%
-  group_by(Region, Month) %>%
-  do(tidy(lm(mean_extent ~ SOI, data = .)))
-
-# Print regression results
-print(regression_results)
-
-# Filter the regression results for the SOI term
-soi_coefficients <- regression_results %>%
-  filter(term == "SOI")
-
-# Function to create a plot for each region
-plot_soi_effect <- function(region_data) {
-  ggplot(region_data, aes(x = factor(Month), y = estimate, color = factor(Month))) +
-    geom_point(size = 3) +
-    geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
-    geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-    labs(
-      title = paste("Effect of SOI on Sea Ice Extent:", unique(region_data$Region)),
-      x = "Month",
-      y = "SOI Coefficient Estimate",
-      color = "Month"
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(hjust = 0.5),
-      legend.position = "none"
-    )
-}
-
-# Apply the function for each region and plot
-unique_regions <- unique(soi_coefficients$Region)
-plots <- lapply(unique_regions, function(region) {
-  region_data <- soi_coefficients %>% filter(Region == region)
-  plot_soi_effect(region_data)
-})
-
-# Display the plots
-do.call(grid.arrange, c(plots, ncol = 2))
-
-# # Create a combined plot showing the SOI coefficients for all regions and months
-# ggplot(soi_coefficients, aes(x = factor(Month), y = estimate, color = Region)) +
-#   geom_point(size = 3) +
-#   geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
-#   geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-#   labs(
-#     title = "Effect of SOI on Sea Ice Extent Across Regions and Months",
-#     x = "Month",
-#     y = "SOI Coefficient Estimate",
-#     color = "Region"
-#   ) +
-#   theme_minimal() +
-#   theme(
-#     plot.title = element_text(hjust = 0.5)
-  # )
-
-# Create individual plots for each region and arrange them using facet_wrap
-ggplot(soi_coefficients, aes(x = factor(Month), y = estimate)) +
-  geom_point(size = 3) +
-  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-  facet_wrap(~ Region, scales = "free_y") +
-  labs(
-    title = "Effect of SOI on Sea Ice Extent Across Regions and Months",
-    x = "Month",
-    y = "SOI Coefficient Estimate"
-  ) +
-  theme_minimal() +
-  theme(
-    plot.title = element_text(hjust = 0.5)
-  )
-
-
-```
-
-
-
-
-
 
