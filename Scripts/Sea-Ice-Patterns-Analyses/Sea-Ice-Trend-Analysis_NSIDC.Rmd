@@ -17,96 +17,6 @@ library(lubridate)
 ```
 
 
-**Changepoint Analysis**
-
-Penalty Options
-
-The penalty argument in the cpt.mean function specifies how the cost of adding a changepoint is penalized. Here are the different penalty options:
-
-    None: No penalty is applied. This may lead to overfitting, as many changepoints might be identified.
-    SIC (Schwarz Information Criterion): Also known as BIC (Bayesian Information Criterion). It includes a penalty term for the number of changepoints, preventing overfitting by penalizing more complex models.
-    BIC (Bayesian Information Criterion): Similar to SIC, penalizes more complex models to avoid overfitting.
-    MBIC (Modified BIC): A modified version of BIC that can be more robust in certain scenarios.
-    AIC (Akaike Information Criterion): Penalizes the number of parameters in the model, with less penalty than BIC, often leading to more changepoints being identified.
-    Hannan-Quinn: A criterion similar to BIC and AIC but with a different penalty structure, typically lying between AIC and BIC in terms of strictness.
-    Asymptotic: Uses an asymptotic penalty based on a theoretical Type I error rate. Requires the pen.value argument to specify the error rate (e.g., 0.05).
-    Manual: Allows you to manually specify a penalty formula or value using the pen.value argument.
-    CROPS (Change-in-Rank-Penalty Search): Searches over a range of penalty values, specified by a two-element vector in pen.value. Only works with the PELT method.
-
-Method Options
-
-The method argument in the cpt.mean function specifies the algorithm used for detecting changepoints. Here are the different method options:
-
-    AMOC (At Most One Changepoint): Assumes at most one changepoint in the data. This method is simpler and faster but only detects a single changepoint.
-    PELT (Pruned Exact Linear Time): A powerful and efficient method that can handle multiple changepoints. It uses a pruning technique to reduce the number of potential changepoints, making it suitable for larger datasets.
-    SegNeigh (Segment Neighbourhood): Searches for the optimal segmentation by considering all possible segmentations up to a specified number of changepoints (Q). It is computationally intensive but can be more accurate for smaller datasets.
-    BinSeg (Binary Segmentation): Uses a binary segmentation approach to recursively divide the data and identify changepoints. This method is faster than SegNeigh and can handle multiple changepoints, but it may be less accurate in some cases.
-
-Example Adjustments
-
-Depending on your data and the goals of your analysis, you can adjust the penalty and method arguments to better suit your needs. For example:
-
-    For a conservative approach with fewer changepoints, you might use penalty = "BIC" or penalty = "SIC".
-    To explore a broader range of possible changepoints, you might use penalty = "AIC" or penalty = "None".
-    For large datasets where computational efficiency is important, you might use method = "PELT".
-    For smaller datasets where precision is critical, you might use method = "SegNeigh" with an appropriate value for Q.
-
-```{r}
-
-# Install necessary packages if not already installed
-if (!require("changepoint")) install.packages("changepoint")
-if (!require("dplyr")) install.packages("dplyr")
-
-# Load libraries
-library(changepoint)
-library(dplyr)
-
-# Load your dataset
-nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
-
-# Inspect the structure of the dataset
-str(nsidc_metrics)
-
-# Aggregate the data to get the maximum extent for each year
-annual_max_extent <- nsidc_metrics %>%
-  group_by(Year) %>%
-  summarize(Max_Extent = max(IceExtent_km, na.rm = TRUE))
-
-# Define changepoint parameters
-penalty_type <- "BIC"       # Options: "None", "SIC", "BIC", "MBIC", "AIC", "Hannan-Quinn", "Asymptotic", "Manual", "CROPS"
-pen_value <- 0.0000001               # Value for manual or asymptotic penalty, or vector for CROPS
-method_type <- "SegNeigh"        # Options: "AMOC", "PELT", "SegNeigh", "BinSeg"
-max_changepoints <- 5        # Maximum number of changepoints for "BinSeg" or "SegNeigh" methods
-test_statistic <- "Normal"   # Options: "Normal", "CUSUM"
-min_segment_length <- 1      # Minimum segment length
-
-# Run changepoint analysis on the maximum annual extent with specified parameters
-cpt_annual_max <- cpt.mean(
-  data = annual_max_extent$Max_Extent, 
-  penalty = penalty_type, 
-  pen.value = pen_value, 
-  method = method_type, 
-  Q = max_changepoints, 
-  test.stat = test_statistic, 
-  minseglen = min_segment_length
-)
-
-# Plot the results
-plot(cpt_annual_max, main = "Changepoint Analysis of Maximum Annual Sea Ice Extent")
-abline(v = annual_max_extent$Year[cpts(cpt_annual_max)], col = "red", lty = 2)
-
-# Print the changepoints
-changepoints_annual_max <- cpts(cpt_annual_max)
-changepoints_annual_max_years <- annual_max_extent$Year[changepoints_annual_max]
-print(changepoints_annual_max_years)
-
-
-```
-
-
-
-
-
 
 **Calculate Sea Ice Extent, Concentration and variability dataframes**
 
@@ -405,7 +315,102 @@ saveRDS(cleaned_metrics, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/datase
 
 
 
+
+
+**Changepoint Analysis**
+
+Penalty Options
+
+The penalty argument in the cpt.mean function specifies how the cost of adding a changepoint is penalized. Here are the different penalty options:
+
+    None: No penalty is applied. This may lead to overfitting, as many changepoints might be identified.
+    SIC (Schwarz Information Criterion): Also known as BIC (Bayesian Information Criterion). It includes a penalty term for the number of changepoints, preventing overfitting by penalizing more complex models.
+    BIC (Bayesian Information Criterion): Similar to SIC, penalizes more complex models to avoid overfitting.
+    MBIC (Modified BIC): A modified version of BIC that can be more robust in certain scenarios.
+    AIC (Akaike Information Criterion): Penalizes the number of parameters in the model, with less penalty than BIC, often leading to more changepoints being identified.
+    Hannan-Quinn: A criterion similar to BIC and AIC but with a different penalty structure, typically lying between AIC and BIC in terms of strictness.
+    Asymptotic: Uses an asymptotic penalty based on a theoretical Type I error rate. Requires the pen.value argument to specify the error rate (e.g., 0.05).
+    Manual: Allows you to manually specify a penalty formula or value using the pen.value argument.
+    CROPS (Change-in-Rank-Penalty Search): Searches over a range of penalty values, specified by a two-element vector in pen.value. Only works with the PELT method.
+
+Method Options
+
+The method argument in the cpt.mean function specifies the algorithm used for detecting changepoints. Here are the different method options:
+
+    AMOC (At Most One Changepoint): Assumes at most one changepoint in the data. This method is simpler and faster but only detects a single changepoint.
+    PELT (Pruned Exact Linear Time): A powerful and efficient method that can handle multiple changepoints. It uses a pruning technique to reduce the number of potential changepoints, making it suitable for larger datasets.
+    SegNeigh (Segment Neighbourhood): Searches for the optimal segmentation by considering all possible segmentations up to a specified number of changepoints (Q). It is computationally intensive but can be more accurate for smaller datasets.
+    BinSeg (Binary Segmentation): Uses a binary segmentation approach to recursively divide the data and identify changepoints. This method is faster than SegNeigh and can handle multiple changepoints, but it may be less accurate in some cases.
+
+Example Adjustments
+
+Depending on your data and the goals of your analysis, you can adjust the penalty and method arguments to better suit your needs. For example:
+
+    For a conservative approach with fewer changepoints, you might use penalty = "BIC" or penalty = "SIC".
+    To explore a broader range of possible changepoints, you might use penalty = "AIC" or penalty = "None".
+    For large datasets where computational efficiency is important, you might use method = "PELT".
+    For smaller datasets where precision is critical, you might use method = "SegNeigh" with an appropriate value for Q.
+
+```{r}
+
+# Install necessary packages if not already installed
+if (!require("changepoint")) install.packages("changepoint")
+if (!require("dplyr")) install.packages("dplyr")
+
+# Load libraries
+library(changepoint)
+library(dplyr)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
+
+# Inspect the structure of the dataset
+str(nsidc_metrics)
+
+# Aggregate the data to get the maximum extent for each year
+annual_max_extent <- nsidc_metrics %>%
+  group_by(Year) %>%
+  summarize(Max_Extent = min(IceExtent_km, na.rm = TRUE))
+
+# Define changepoint parameters
+penalty_type <- "BIC"       # Options: "None", "SIC", "BIC", "MBIC", "AIC", "Hannan-Quinn", "Asymptotic", "Manual", "CROPS"
+pen_value <- 0.0000001               # Value for manual or asymptotic penalty, or vector for CROPS
+method_type <- "SegNeigh"        # Options: "AMOC", "PELT", "SegNeigh", "BinSeg"
+max_changepoints <- 5        # Maximum number of changepoints for "BinSeg" or "SegNeigh" methods
+test_statistic <- "Normal"   # Options: "Normal", "CUSUM"
+min_segment_length <- 1      # Minimum segment length
+
+# Run changepoint analysis on the maximum annual extent with specified parameters
+cpt_annual_max <- cpt.mean(
+  data = annual_max_extent$Max_Extent, 
+  penalty = penalty_type, 
+  pen.value = pen_value, 
+  method = method_type, 
+  Q = max_changepoints, 
+  test.stat = test_statistic, 
+  minseglen = min_segment_length
+)
+
+# Plot the results
+plot(cpt_annual_max, main = "Changepoint Analysis of Maximum Annual Sea Ice Extent")
+abline(v = annual_max_extent$Year[cpts(cpt_annual_max)], col = "red", lty = 2)
+
+# Print the changepoints
+changepoints_annual_max <- cpts(cpt_annual_max)
+changepoints_annual_max_years <- annual_max_extent$Year[changepoints_annual_max]
+print(changepoints_annual_max_years)
+
+
+```
+
+
+
+
+
+
 **Function to Run Analyses**
+
+This script loads a dataset of sea ice metrics, filters it for winter months (June - September), and calculates both monthly and annual averages of a specified variable for different regions. The script fits a generalized least squares (GLS) model to these averages to identify trends over time. To address the monthly vs. annual issue, it ensures that annual metrics are calculated by aggregating all daily values within the specified months by year and then averaging them, rather than averaging pre-calculated monthly means, thus avoiding potential biases. The results are saved to a CSV file with appropriate metadata.
 
 ```{r}
 # Load necessary libraries
@@ -416,73 +421,78 @@ library(scales)
 library(lmtest) # For Breusch-Pagan test
 library(nortest) # For Shapiro-Wilk test
 
-analyze_sic_variability <- function(input_dataset, variables, time_periods, output_directory) {
+analyze_sic_variability <- function(input_dataset, variable, output_directory, start_year = NULL, end_year = NULL) {
   
   # Load your dataset
   nsidc_metrics <- readRDS(input_dataset)
+  
+  # Ensure Year, Month, Day columns exist
+  nsidc_metrics <- nsidc_metrics %>%
+    mutate(Year = year(Date), Month = month(Date), Day = day(Date))
   
   # Filter for winter months (June - September)
   winter_metrics <- nsidc_metrics %>%
     filter(Month %in% c(6, 7, 8, 9))
   
+  # Filter dataset by the specified year range if provided
+  if (!is.null(start_year)) {
+    winter_metrics <- winter_metrics %>% filter(Year >= start_year)
+  }
+  if (!is.null(end_year)) {
+    winter_metrics <- winter_metrics %>% filter(Year <= end_year)
+  }
+  
   # Initialize a list to store results
   gls_results <- list()
   
-  for (variable in variables) {
-    
-    # Calculate monthly averages of the specified variable for each region
-    monthly_averages <- winter_metrics %>%
-      group_by(Year, Month, Region) %>%
-      summarise(mean_var = mean(get(variable), na.rm = TRUE), 
-                mean_var_sd = sd(get(variable), na.rm = TRUE), .groups = 'drop') %>%
-      ungroup()
-    
-    # Create a time variable for trend analysis
-    monthly_averages <- monthly_averages %>%
-      mutate(Time = as.numeric(Year) + (Month - 1) / 12,
-             month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
-    
-    # Define a function to fit a GLS model for a given region and month
-    fit_gls_model <- function(region_data) {
-      gls_model <- gls(mean_var ~ Time, correlation = corAR1(), data = region_data)
-      return(gls_model)
-    }
-    
-    # Apply the model for each unique region and month combination and store the results
-    regions <- unique(monthly_averages$Region)
-    months <- unique(monthly_averages$Month)
-    
-    for (region in regions) {
-      for (month in months) {
-        region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
-        if (nrow(region_month_data) > 1) {
-          gls_results[[paste(variable, region, month, sep = "_")]] <- fit_gls_model(region_month_data)
-        }
+  # Calculate monthly averages of the specified variable for each region
+  monthly_averages <- winter_metrics %>%
+    group_by(Year, Month, Region) %>%
+    summarise(mean_var = mean(get(variable), na.rm = TRUE), .groups = 'drop') %>%
+    ungroup()
+  
+  # Create a time variable for trend analysis
+  monthly_averages <- monthly_averages %>%
+    mutate(Time = as.numeric(Year) + (Month - 1) / 12,
+           month2 = month(ymd(paste(Year, Month, 1)), label = TRUE, abbr = FALSE))
+  
+  # Define a function to fit a GLS model for a given region and month
+  fit_gls_model <- function(region_data) {
+    gls_model <- gls(mean_var ~ Time, correlation = corAR1(), data = region_data)
+    return(gls_model)
+  }
+  
+  # Apply the model for each unique region and month combination and store the results
+  regions <- unique(monthly_averages$Region)
+  months <- unique(monthly_averages$Month)
+  
+  for (region in regions) {
+    for (month in months) {
+      region_month_data <- monthly_averages %>% filter(Region == region, Month == month)
+      if (nrow(region_month_data) > 1) {
+        gls_results[[paste(region, month, sep = "_")]] <- fit_gls_model(region_month_data)
       }
     }
-    
-    if ("annual" %in% time_periods) {
-      # Run GLS model for annual (June-September) metrics
-      annual_metrics <- winter_metrics %>%
-        group_by(Year, Region) %>%
-        summarise(mean_var = mean(get(variable), na.rm = TRUE), 
-                  mean_var_sd = sd(get(variable), na.rm = TRUE), .groups = 'drop') %>%
-        ungroup() %>%
-        mutate(Time = as.numeric(Year))
-      
-      for (region in regions) {
-        region_annual_data <- annual_metrics %>% filter(Region == region)
-        if (nrow(region_annual_data) > 1) {
-          gls_results[[paste(variable, region, "Annual", sep = "_")]] <- fit_gls_model(region_annual_data)
-        }
-      }
+  }
+  
+  # Calculate annual (June-September) metrics by aggregating all daily values
+  annual_metrics <- winter_metrics %>%
+    group_by(Year, Region) %>%
+    summarise(mean_var = mean(get(variable), na.rm = TRUE), .groups = 'drop') %>%
+    ungroup() %>%
+    mutate(Time = as.numeric(Year))
+  
+  for (region in regions) {
+    region_annual_data <- annual_metrics %>% filter(Region == region)
+    if (nrow(region_annual_data) > 1) {
+      gls_results[[paste(region, "Annual", sep = "_")]] <- fit_gls_model(region_annual_data)
     }
   }
   
   # Initialize a dataframe to store the GLS results
   gls_summary_df <- data.frame(
-    Variable = character(),
     Region = character(),
+    Metric = character(),
     Month = character(),
     Intercept_Estimate = numeric(),
     Intercept_StdError = numeric(),
@@ -532,14 +542,13 @@ analyze_sic_variability <- function(input_dataset, variables, time_periods, outp
     
     # Split key to get variable, region, and month
     key_split <- unlist(strsplit(key, "_"))
-    variable <- key_split[1]
-    region <- key_split[2]
-    month <- ifelse(length(key_split) > 2, key_split[3], "Annual")
+    region <- key_split[1]
+    month <- ifelse(length(key_split) > 1, key_split[2], "Annual")
     
     # Append to dataframe
     gls_summary_df <- rbind(gls_summary_df, data.frame(
-      Variable = variable,
       Region = region,
+      Metric = variable,
       Month = month,
       Intercept_Estimate = intercept_estimate,
       Intercept_StdError = intercept_std_error,
@@ -558,45 +567,49 @@ analyze_sic_variability <- function(input_dataset, variables, time_periods, outp
     ))
   }
   
-  # Save the organized GLS summary dataframe to a CSV file for each variable
-  for (variable in variables) {
-    output_file <- file.path(output_directory, paste0("GLS_Summary_Results_with_Bonferroni_", variable, ".csv"))
-    write.csv(gls_summary_df %>% filter(Variable == variable), output_file, row.names = FALSE)
-  }
+  # Save the organized GLS summary dataframe to a CSV file
+  year_range <- paste(start_year, end_year, sep = "-")
+  output_file <- file.path(output_directory, paste0("GLS_Summary_Results_with_Bonferroni_", variable, "_", year_range, ".csv"))
+  write.csv(gls_summary_df, output_file, row.names = FALSE)
   
   # Optional: View the organized GLS summary dataframe
   return(gls_summary_df)
 }
 
 # Example usage:
-# result <- analyze_sic_variability(
-#   input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics_Monthly_Variability_Metrics.rds",
-#   variables = c("MonthlySICVariability", "MonthlyExtentVariability"),
-#   time_periods = c("monthly", "annual"),
-#   output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis"
-# )
-
+result <- analyze_sic_variability(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds",
+  variable = "MeanSIC",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1981,
+  end_year = 2023
+)
 
 
 ```
 
 
 
+**Deploy the function**
+
+```{r}
+# Example usage:
+result <- analyze_sic_variability(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds",
+  variable = "MeanSIC",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1979,
+  end_year = 2024
+)
 
 
 
-
-
-
-
-
+```
 
 
 **Analysis - Sea Ice Extent**
 
 This script fits Generalized Least Squares (GLS) models to analyze trends in sea ice extent over time for different regions and months during the winter period (June - September). It performs model diagnostics including residual vs. fitted plots, Q-Q plots, autocorrelation function (ACF) plots, the Breusch-Pagan test for heteroscedasticity, and the Shapiro-Wilk test for normality of residuals to ensure the assumptions of the models are met and to identify any potential issues.
-
-
 
 
 ```{r}
