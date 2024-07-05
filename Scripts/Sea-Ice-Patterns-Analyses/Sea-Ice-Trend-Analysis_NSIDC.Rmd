@@ -17,6 +17,95 @@ library(lubridate)
 ```
 
 
+**Changepoint Analysis**
+
+Penalty Options
+
+The penalty argument in the cpt.mean function specifies how the cost of adding a changepoint is penalized. Here are the different penalty options:
+
+    None: No penalty is applied. This may lead to overfitting, as many changepoints might be identified.
+    SIC (Schwarz Information Criterion): Also known as BIC (Bayesian Information Criterion). It includes a penalty term for the number of changepoints, preventing overfitting by penalizing more complex models.
+    BIC (Bayesian Information Criterion): Similar to SIC, penalizes more complex models to avoid overfitting.
+    MBIC (Modified BIC): A modified version of BIC that can be more robust in certain scenarios.
+    AIC (Akaike Information Criterion): Penalizes the number of parameters in the model, with less penalty than BIC, often leading to more changepoints being identified.
+    Hannan-Quinn: A criterion similar to BIC and AIC but with a different penalty structure, typically lying between AIC and BIC in terms of strictness.
+    Asymptotic: Uses an asymptotic penalty based on a theoretical Type I error rate. Requires the pen.value argument to specify the error rate (e.g., 0.05).
+    Manual: Allows you to manually specify a penalty formula or value using the pen.value argument.
+    CROPS (Change-in-Rank-Penalty Search): Searches over a range of penalty values, specified by a two-element vector in pen.value. Only works with the PELT method.
+
+Method Options
+
+The method argument in the cpt.mean function specifies the algorithm used for detecting changepoints. Here are the different method options:
+
+    AMOC (At Most One Changepoint): Assumes at most one changepoint in the data. This method is simpler and faster but only detects a single changepoint.
+    PELT (Pruned Exact Linear Time): A powerful and efficient method that can handle multiple changepoints. It uses a pruning technique to reduce the number of potential changepoints, making it suitable for larger datasets.
+    SegNeigh (Segment Neighbourhood): Searches for the optimal segmentation by considering all possible segmentations up to a specified number of changepoints (Q). It is computationally intensive but can be more accurate for smaller datasets.
+    BinSeg (Binary Segmentation): Uses a binary segmentation approach to recursively divide the data and identify changepoints. This method is faster than SegNeigh and can handle multiple changepoints, but it may be less accurate in some cases.
+
+Example Adjustments
+
+Depending on your data and the goals of your analysis, you can adjust the penalty and method arguments to better suit your needs. For example:
+
+    For a conservative approach with fewer changepoints, you might use penalty = "BIC" or penalty = "SIC".
+    To explore a broader range of possible changepoints, you might use penalty = "AIC" or penalty = "None".
+    For large datasets where computational efficiency is important, you might use method = "PELT".
+    For smaller datasets where precision is critical, you might use method = "SegNeigh" with an appropriate value for Q.
+
+```{r}
+
+# Install necessary packages if not already installed
+if (!require("changepoint")) install.packages("changepoint")
+if (!require("dplyr")) install.packages("dplyr")
+
+# Load libraries
+library(changepoint)
+library(dplyr)
+
+# Load your dataset
+nsidc_metrics <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds")
+
+# Inspect the structure of the dataset
+str(nsidc_metrics)
+
+# Aggregate the data to get the maximum extent for each year
+annual_max_extent <- nsidc_metrics %>%
+  group_by(Year) %>%
+  summarize(Max_Extent = max(IceExtent_km, na.rm = TRUE))
+
+# Define changepoint parameters
+penalty_type <- "BIC"       # Options: "None", "SIC", "BIC", "MBIC", "AIC", "Hannan-Quinn", "Asymptotic", "Manual", "CROPS"
+pen_value <- 0.0000001               # Value for manual or asymptotic penalty, or vector for CROPS
+method_type <- "SegNeigh"        # Options: "AMOC", "PELT", "SegNeigh", "BinSeg"
+max_changepoints <- 5        # Maximum number of changepoints for "BinSeg" or "SegNeigh" methods
+test_statistic <- "Normal"   # Options: "Normal", "CUSUM"
+min_segment_length <- 1      # Minimum segment length
+
+# Run changepoint analysis on the maximum annual extent with specified parameters
+cpt_annual_max <- cpt.mean(
+  data = annual_max_extent$Max_Extent, 
+  penalty = penalty_type, 
+  pen.value = pen_value, 
+  method = method_type, 
+  Q = max_changepoints, 
+  test.stat = test_statistic, 
+  minseglen = min_segment_length
+)
+
+# Plot the results
+plot(cpt_annual_max, main = "Changepoint Analysis of Maximum Annual Sea Ice Extent")
+abline(v = annual_max_extent$Year[cpts(cpt_annual_max)], col = "red", lty = 2)
+
+# Print the changepoints
+changepoints_annual_max <- cpts(cpt_annual_max)
+changepoints_annual_max_years <- annual_max_extent$Year[changepoints_annual_max]
+print(changepoints_annual_max_years)
+
+
+```
+
+
+
+
 
 
 **Calculate Sea Ice Extent, Concentration and variability dataframes**
@@ -503,16 +592,11 @@ analyze_sic_variability <- function(input_dataset, variables, time_periods, outp
 
 
 
-
+**Analysis - Sea Ice Extent**
 
 This script fits Generalized Least Squares (GLS) models to analyze trends in sea ice extent over time for different regions and months during the winter period (June - September). It performs model diagnostics including residual vs. fitted plots, Q-Q plots, autocorrelation function (ACF) plots, the Breusch-Pagan test for heteroscedasticity, and the Shapiro-Wilk test for normality of residuals to ensure the assumptions of the models are met and to identify any potential issues.
 
 
-
-
-
-
-**Analysis - Sea Ice Extent**
 
 
 ```{r}
