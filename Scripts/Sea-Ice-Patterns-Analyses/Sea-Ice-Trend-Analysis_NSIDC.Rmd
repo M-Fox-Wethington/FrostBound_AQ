@@ -374,9 +374,9 @@ annual_max_extent <- nsidc_metrics %>%
 
 # Define changepoint parameters
 penalty_type <- "BIC"       # Options: "None", "SIC", "BIC", "MBIC", "AIC", "Hannan-Quinn", "Asymptotic", "Manual", "CROPS"
-pen_value <- 0.0000001               # Value for manual or asymptotic penalty, or vector for CROPS
+pen_value <- 0               # Value for manual or asymptotic penalty, or vector for CROPS
 method_type <- "SegNeigh"        # Options: "AMOC", "PELT", "SegNeigh", "BinSeg"
-max_changepoints <- 5        # Maximum number of changepoints for "BinSeg" or "SegNeigh" methods
+max_changepoints <- 15        # Maximum number of changepoints for "BinSeg" or "SegNeigh" methods
 test_statistic <- "Normal"   # Options: "Normal", "CUSUM"
 min_segment_length <- 1      # Minimum segment length
 
@@ -421,7 +421,7 @@ library(scales)
 library(lmtest) # For Breusch-Pagan test
 library(nortest) # For Shapiro-Wilk test
 
-analyze_sic_variability <- function(input_dataset, variable, output_directory, start_year = NULL, end_year = NULL) {
+gls_analysis_function <- function(input_dataset, variable, output_directory, start_year = NULL, end_year = NULL) {
   
   # Load your dataset
   nsidc_metrics <- readRDS(input_dataset)
@@ -577,7 +577,7 @@ analyze_sic_variability <- function(input_dataset, variable, output_directory, s
 }
 
 # Example usage:
-result <- analyze_sic_variability(
+result <- gls_analysis_function(
   input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds",
   variable = "MeanSIC",  # Specify the metric here
   output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
@@ -593,14 +593,203 @@ result <- analyze_sic_variability(
 **Deploy the function**
 
 ```{r}
+
+
+
+
 # Example usage:
-result <- analyze_sic_variability(
+result <- gls_analysis_function(
   input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds",
-  variable = "MeanSIC",  # Specify the metric here
+  variable = "IceExtent_km",  # Specify the metric here
   output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
   start_year = 1979,
   end_year = 2024
 )
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds",
+  variable = "IceExtent_km",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 2010,
+  end_year = 2024
+)
+
+
+#Daily SIC Variability 
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds",
+  variable = "SICVariability",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1979,
+  end_year = 2024
+)
+
+#Daily SIC Variability 
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics.rds",
+  variable = "SICVariability",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 2010,
+  end_year = 2024
+)
+
+
+
+###############
+###############
+
+
+# Monthly SIC  Variability 
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics_Monthly_Variability_Metrics.rds",
+  variable = "MonthlySICVariability",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 2010,
+  end_year = 2024
+)
+
+
+
+# Monthly SIC  Variability 
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics_Monthly_Variability_Metrics.rds",
+  variable = "MonthlySICVariability",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1979,
+  end_year = 2024
+)
+
+
+
+
+# Monthly Extent  Variability 
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics_Monthly_Variability_Metrics.rds",
+  variable = "MonthlyExtentVariability",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 2010,
+  end_year = 2024
+)
+
+
+# Monthly Extent  Variability 
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Harmonized_12km_Daily_Metrics_Monthly_Variability_Metrics.rds",
+  variable = "MonthlyExtentVariability",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1979,
+  end_year = 2024
+)
+
+
+###############
+###############
+
+#Persistence
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds",
+  variable = "Persistence",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 2010,
+  end_year = 2024
+)
+
+#Persistence
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds",
+  variable = "Persistence",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1979,
+  end_year = 2024
+)
+
+
+
+#Persistence SD
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds",
+  variable = "Persistence_SD",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 2010,
+  end_year = 2024
+)
+
+#Persistence SD
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds",
+  variable = "Persistence_SD",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1979,
+  end_year = 2024
+)
+
+
+#Duration 
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds",
+  variable = "Mean_Monthly_Duration",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 2010,
+  end_year = 2024
+)
+
+#Duration
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds",
+  variable = "Mean_Monthly_Duration",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1979,
+  end_year = 2024
+)
+
+
+
+#Duration SD
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds",
+  variable = "Duration_SD",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 2010,
+  end_year = 2024
+)
+
+#Duration SD
+
+# Example usage:
+result <- gls_analysis_function(
+  input_dataset = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Persistence_Duration_Metrics.rds",
+  variable = "Duration_SD",  # Specify the metric here
+  output_directory = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis",
+  start_year = 1979,
+  end_year = 2024
+)
+
+
 
 
 
