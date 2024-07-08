@@ -21,7 +21,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 
 
-
+##Generate Gentoo Growth Parameters
 
 ```{r}
 
@@ -70,7 +70,7 @@ presence_absence_assumptions <- expand.grid(
   select(site_id, season, presence, known_w, count, accuracy)
 
 # Load the JAGS MCMC Output File
-load("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/model_data_rinits_output.rda")
+load("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/model_data_rinits_output.rda")
 
 # Extract the Gentoo Abundance Estimates (lz)
 model_samples <- as.matrix(model_data_rinits_output)
@@ -148,13 +148,13 @@ final_data <- final_data %>%
 # Display the adjusted final_data
 print(head(final_data))
 
-write.csv(final_data, "D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
+write.csv(final_data, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/modeled_gentoo_parameters.csv")
 # Print the head of the final data with growth rates
 print(head(final_data))
 
 ```
 
-
+**Calcualte and plot geometric mean of growth rates**
 ```{r}
 library(ggplot2)
 library(dplyr)
@@ -210,7 +210,7 @@ ggplot(site_data, aes(x = year, y = mean_abundance)) +
 
 
 
-**Sea Ice Concentration Analysis2 (Home Range Analysis)**
+**Sea Ice Concentration Analysis (Home Range Analysis)**
 ```{r}
 # Load necessary libraries
 library(terra)
@@ -221,7 +221,7 @@ library(lubridate)
 library(nlme)
 
 # Function to compute mean SIC for all valid years within the specified buffer
-compute_mean_sic <- function(buffer_path, nsidc, ice_threshold = 15, winter_months = c(6, 7, 8, 9)) {
+compute_mean_sic <- function(buffer_path, nsidc, ice_threshold = .15, winter_months = c(6, 7, 8, 9)) {
   combined_buffers_sf <- st_read(buffer_path)
   dissolved_buffer <- st_union(combined_buffers_sf)
   buffer_mask <- mask(nsidc, vect(dissolved_buffer))
@@ -285,15 +285,15 @@ fit_gls_models <- function(penguin_abundance_filtered, mean_sic_per_year) {
 }
 
 # Load Gentoo penguin data
-penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
-penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
+penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/gentoo_presence_absence_assumptions.csv")
+penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
 
 # Load study area shapefile
-study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
+study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
 study_area <- st_read(study_area_path)
 
 # Load the NSIDC sea ice concentration data
-nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/NSIDC_25km_Study-Area.nc")
+nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
 
 # Filter the sea ice data from 1980 to 2022
 start_date <- as.Date("1980-01-01")
@@ -323,32 +323,55 @@ print("Penguin abundance data after filtering for consecutively censused sites:"
 print(head(penguin_abundance_filtered)) # Debug print
 
 # Define home range directory and sizes
-home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo-home-ranges-updated/"
+home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges/"
 home_range_sizes <- c(50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
 
-# Loop through each home range size and compute results
-all_results <- list()
+# Create results directory
+results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results"
+dir.create(results_dir, showWarnings = FALSE)
 
+# Initialize dataframes to store all results and significant results
+all_results_df <- data.frame()
+significant_results_df <- data.frame()
+
+# Loop through each home range size and compute results
 for (size in home_range_sizes) {
   buffer_path <- file.path(home_range_dir, paste0("gepe_home_ranges_", size, "km.shp"))
   mean_sic_per_year <- compute_mean_sic(buffer_path, nsidc)
   results <- fit_gls_models(penguin_abundance_filtered, mean_sic_per_year)
-  all_results[[paste(size, "km")]] <- results
+  
+  for (lag in names(results)) {
+    result <- results[[lag]]
+    result_df <- data.frame(
+      HomeRangeSize = size,
+      Lag = lag,
+      AIC = result$AIC,
+      BIC = result$BIC,
+      Coefficient_Intercept = result$coefficients[1, 1],
+      StdError_Intercept = result$coefficients[1, 2],
+      tValue_Intercept = result$coefficients[1, 3],
+      pValue_Intercept = result$coefficients[1, 4],
+      Coefficient_SIC = result$coefficients[2, 1],
+      StdError_SIC = result$coefficients[2, 2],
+      tValue_SIC = result$coefficients[2, 3],
+      pValue_SIC = result$coefficients[2, 4],
+      Bonferroni_Adjusted_pValue_SIC = p.adjust(result$coefficients[2, 4], method = "bonferroni", n = 5)
+    )
+    all_results_df <- rbind(all_results_df, result_df)
+    
+    # Check if the result is significant
+    if (result_df$pValue_SIC < 0.05) {
+      significant_results_df <- rbind(significant_results_df, result_df)
+    }
+  }
 }
 
-# Print the results
-for (size in names(all_results)) {
-  cat("Home Range Size:", size, "\n")
-  for (lag in names(all_results[[size]])) {
-    cat(lag, "Lag:\n")
-    cat("  AIC:", all_results[[size]][[lag]]$AIC, "\n")
-    cat("  BIC:", all_results[[size]][[lag]]$BIC, "\n")
-    cat("  Coefficients:\n")
-    print(all_results[[size]][[lag]]$coefficients)
-    cat("  P-Value:", all_results[[size]][[lag]]$p_value, "\n")
-  }
-  cat("\n")
-}
+# Export the compiled results to CSV
+write.csv(all_results_df, file.path(results_dir, "model_results_sea_ice_concentration.csv"), row.names = FALSE)
+
+# Export the significant results to a separate CSV
+write.csv(significant_results_df, file.path(results_dir, "significant_model_results_sea_ice_concentration.csv"), row.names = FALSE)
+
 
 
 ```
@@ -373,7 +396,7 @@ library(lubridate)
 library(nlme)
 
 # Function to compute mean sea ice persistence for all valid years within the specified buffer
-compute_mean_persistence <- function(buffer_path, nsidc, ice_threshold = 15, winter_months = c(6, 7, 8, 9)) {
+compute_mean_persistence <- function(buffer_path, nsidc, ice_threshold = .15, winter_months = c(6, 7, 8, 9)) {
   combined_buffers_sf <- st_read(buffer_path)
   dissolved_buffer <- st_union(combined_buffers_sf)
   buffer_mask <- mask(nsidc, vect(dissolved_buffer))
@@ -438,18 +461,18 @@ fit_gls_models <- function(penguin_abundance_filtered, mean_persistence_per_year
 }
 
 # Load Gentoo penguin data
-penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
-penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
+penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/gentoo_presence_absence_assumptions.csv")
+penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
 
 # Load study area shapefile
-study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
+study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
 study_area <- st_read(study_area_path)
 
 # Load the NSIDC sea ice concentration data
-nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
 
 # Filter the sea ice data from 1980 to 2022
-start_date <- as.Date("2005-01-01")
+start_date <- as.Date("1980-01-01")
 end_date <- as.Date("2023-09-30")
 nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
 
@@ -477,7 +500,7 @@ print("Penguin abundance data after filtering for consecutively censused sites:"
 print(head(penguin_abundance_filtered)) # Debug print
 
 # Define home range directory and sizes
-home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo-home-ranges-updated/"
+home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges"
 home_range_sizes <- c(25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
 # home_range_sizes <- c(50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
 
