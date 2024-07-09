@@ -7,11 +7,8 @@ output: html_document
 
 
 zi = latent nest abundance (mean-adjusted)
-
 lz = logged abundance (re-expression of above):  lzi,t=log(zi,t). for the ith site in the tth year,
-
 ri = intrinsic growth rate
-
 lp = predicted population growth rate multiplier
 la = actual population growth rate multiplier 
 
@@ -154,7 +151,7 @@ print(head(final_data))
 
 ```
 
-**Calcualte and plot geometric mean of growth rates**
+**calculate and plot geometric mean of growth rates** 
 ```{r}
 library(ggplot2)
 library(dplyr)
@@ -206,11 +203,348 @@ ggplot(site_data, aes(x = year, y = mean_abundance)) +
 
 ```
 
+**Sea Ice Extent ** (updated - needs a larger home range) - consider adding average monthly min/max
+
+```{r}
+# Load necessary libraries
+library(terra)
+library(sf)
+library(dplyr)
+library(nlme)
+library(stringr)
+library(lubridate)
+
+# Function to compute mean extent of sea ice concentration above a threshold
+compute_extent <- function(buffer_path, nsidc, threshold = 0.15, winter_months = c(6, 7, 8, 9)) {
+  combined_buffers_sf <- st_read(buffer_path)
+  dissolved_buffer <- st_union(combined_buffers_sf)
+  buffer_mask <- mask(nsidc, vect(dissolved_buffer))
+  all_years <- unique(year(time(buffer_mask)))
+  
+  results <- data.frame(year = all_years, mean_extent = NA)
+  
+  cell_area_sq_meters <- prod(res(buffer_mask[[1]]))
+  
+  for (year in all_years) {
+    winter_data <- subset(buffer_mask, which(year(time(buffer_mask)) == year & month(time(buffer_mask)) %in% winter_months))
+    if (nlyr(winter_data) > 0) {
+      # Set all values < threshold to 0
+      winter_data <- app(winter_data, fun = function(x) { x[x < threshold] <- 0; return(x) })
+      
+      # Calculate mean SIC excluding NAs for each layer
+      mean_extent <- global(winter_data, fun = 'mean', na.rm = TRUE)[, 1]
+      
+      # Handle sea ice extent: count cells >= threshold for each layer
+      valid_ice_cells <- global(winter_data >= threshold, fun = 'sum', na.rm = TRUE)[, 1]
+      total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_meters) / 1e6  # Convert total ice area to square kilometers
+      
+      results$mean_extent[results$year == year] <- mean(mean_extent, na.rm = TRUE)
+    }
+  }
+  
+  return(results)
+}
+
+# Function to fit GLS models and summarize results
+fit_gls_models <- function(penguin_abundance_filtered, metrics) {
+  results <- list()
+  for (lag in 1:5) {
+    penguin_abundance_filtered <- penguin_abundance_filtered %>%
+      rowwise() %>%
+      mutate(!!paste0("overwinter_extent_", lag, "yr") := ifelse(year - lag >= 1980, metrics$mean_extent[metrics$year == year - lag], NA)) %>%
+      ungroup()
+  }
+  
+  for (lag in 1:5) {
+    penguin_abundance_filtered_lag <- penguin_abundance_filtered %>%
+      filter(!is.na(!!sym(paste0("overwinter_extent_", lag, "yr"))))
+    
+    formula <- as.formula(paste("growth_rate ~ overwinter_extent_", lag, "yr", sep = ""))
+    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered_lag)
+    summary_model <- summary(model)
+    
+    results[[paste("Lag", lag, sep = "_")]] <- list(
+      AIC = AIC(model),
+      BIC = BIC(model),
+      coefficients = summary_model$tTable,
+      p_value_extent = summary_model$tTable[2, 4]
+    )
+  }
+  
+  return(results)
+}
+
+# Main analysis function
+analyze_sea_ice_effect <- function(thresholds) {
+  # Load Gentoo penguin data
+  penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/gentoo_presence_absence_assumptions.csv")
+  penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
+  
+  # Load study area shapefile
+  study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
+  study_area <- st_read(study_area_path)
+  
+  # Load the NSIDC sea ice concentration data
+  nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
+  
+  # Filter the sea ice data from 1981 to 2023
+  start_date <- as.Date("1981-01-01")
+  end_date <- as.Date("2023-09-30")
+  nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+  
+  # Adjust the season column in the penguin abundance data
+  penguin_abundance_data <- penguin_abundance_data %>%
+    mutate(year = 1970 + season - 1)
+  
+  # Filter penguin data to keep only consecutively censused sites and clean duplicates
+  consecutively_censused <- penguin_data %>%
+    arrange(site_id, season) %>%
+    group_by(site_id) %>%
+    mutate(next_season = lead(season),
+           next_presence = lead(presence)) %>%
+    filter(presence == 1 & next_presence == 1 & season != next_season) %>%
+    ungroup() %>%
+    select(site_id, season, presence, next_season)
+  
+  # Merge with penguin abundance data
+  penguin_abundance_filtered <- penguin_abundance_data %>%
+    left_join(consecutively_censused, by = c("site_id", "year" = "season")) %>%
+    filter(!is.na(next_season))
+  
+  print("Penguin abundance data after filtering for consecutively censused sites:")
+  print(head(penguin_abundance_filtered)) # Debug print
+  
+  # Define home range directory
+  home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges"
+  home_range_files <- list.files(home_range_dir, pattern = "\\.shp$", full.names = TRUE)
+  
+  # Create results directory
+  results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results"
+  dir.create(results_dir, showWarnings = FALSE)
+  
+  # Initialize dataframes to store all results and significant results
+  all_results_df <- data.frame()
+  significant_results_df <- data.frame()
+  
+  # Loop through each home range shapefile and compute results
+  for (threshold in thresholds) {
+    for (buffer_path in home_range_files) {
+      home_range_size <- str_extract(buffer_path, "(\\d+)km")
+      metrics <- compute_extent(buffer_path, nsidc, threshold = threshold)
+      results <- fit_gls_models(penguin_abundance_filtered, metrics)
+      
+      for (lag in 1:5) {
+        result <- results[[paste0("Lag_", lag)]]
+        result_df <- data.frame(
+          Threshold_Extent = threshold,
+          HomeRangeSize_Extent = home_range_size,
+          Lag_Extent = lag,
+          AIC_Extent = result$AIC,
+          BIC_Extent = result$BIC,
+          Coefficient_Intercept_Extent = result$coefficients[1, 1],
+          StdError_Intercept_Extent = result$coefficients[1, 2],
+          tValue_Intercept_Extent = result$coefficients[1, 3],
+          pValue_Intercept_Extent = result$coefficients[1, 4],
+          Coefficient_Extent = result$coefficients[2, 1],
+          StdError_Extent = result$coefficients[2, 2],
+          tValue_Extent = result$coefficients[2, 3],
+          pValue_Extent = result$p_value_extent,
+          Bonferroni_Adjusted_pValue_Extent = p.adjust(result$p_value_extent, method = "bonferroni", n = 5)
+        )
+        all_results_df <- rbind(all_results_df, result_df)
+      }
+    }
+  }
+  
+  # Filter significant results using dplyr
+  significant_results_df <- all_results_df %>%
+    filter(pValue_Extent < 0.05)
+  
+  # Export the compiled results to CSV
+  write.csv(all_results_df, file.path(results_dir, "model_results_sea_ice_extent.csv"), row.names = FALSE)
+  
+  # Export the significant results to a separate CSV
+  write.csv(significant_results_df, file.path(results_dir, "significant_model_results_sea_ice_extent.csv"), row.names = FALSE)
+}
+
+# Run the analysis
+analyze_sea_ice_effect(.15)
 
 
 
+```
 
-**Sea Ice Concentration Analysis (Home Range Analysis)**
+
+**Sea Ice Extent Variabilty** (updated - needs a larger home range) - consider adding average monthly min/max
+```{r}
+# Load necessary libraries
+library(terra)
+library(sf)
+library(dplyr)
+library(nlme)
+library(stringr)
+library(lubridate)
+
+# Function to compute extent variability of sea ice concentration above a threshold
+compute_extent_variability <- function(buffer_path, nsidc, threshold = 0.15, winter_months = c(6, 7, 8, 9)) {
+  combined_buffers_sf <- st_read(buffer_path)
+  dissolved_buffer <- st_union(combined_buffers_sf)
+  buffer_mask <- mask(nsidc, vect(dissolved_buffer))
+  all_years <- unique(year(time(buffer_mask)))
+  
+  results <- data.frame(year = all_years, extent_variability = NA)
+  
+  cell_area_sq_meters <- prod(res(buffer_mask[[1]]))
+  
+  for (year in all_years) {
+    winter_data <- subset(buffer_mask, which(year(time(buffer_mask)) == year & month(time(buffer_mask)) %in% winter_months))
+    if (nlyr(winter_data) > 0) {
+      # Set all values < threshold to 0
+      winter_data <- app(winter_data, fun = function(x) { x[x < threshold] <- 0; return(x) })
+      
+      # Handle sea ice extent: count cells >= threshold for each layer
+      valid_ice_cells <- global(winter_data >= threshold, fun = 'sum', na.rm = TRUE)[, 1]
+      monthly_extent <- tapp(winter_data, index = month(time(winter_data)), fun = function(x) sum(x >= threshold) * cell_area_sq_meters / 1e6, na.rm = TRUE)
+      extent_variability <- sd(monthly_extent, na.rm = TRUE)
+      
+      results$extent_variability[results$year == year] <- extent_variability
+    }
+  }
+  
+  return(results)
+}
+
+# Function to fit GLS models and summarize results
+fit_gls_models <- function(penguin_abundance_filtered, metrics) {
+  results <- list()
+  for (lag in 1:5) {
+    penguin_abundance_filtered <- penguin_abundance_filtered %>%
+      rowwise() %>%
+      mutate(!!paste0("extent_variability_", lag, "yr") := ifelse(year - lag >= 1980, metrics$extent_variability[metrics$year == year - lag], NA)) %>%
+      ungroup()
+  }
+  
+  for (lag in 1:5) {
+    penguin_abundance_filtered_lag <- penguin_abundance_filtered %>%
+      filter(!is.na(!!sym(paste0("extent_variability_", lag, "yr"))))
+    
+    formula <- as.formula(paste("growth_rate ~ extent_variability_", lag, "yr", sep = ""))
+    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered_lag)
+    summary_model <- summary(model)
+    
+    results[[paste("Lag", lag, sep = "_")]] <- list(
+      AIC = AIC(model),
+      BIC = BIC(model),
+      coefficients = summary_model$tTable,
+      p_value_variability = summary_model$tTable[2, 4]
+    )
+  }
+  
+  return(results)
+}
+
+# Main analysis function
+analyze_sea_ice_effect <- function(thresholds) {
+  # Load Gentoo penguin data
+  penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/gentoo_presence_absence_assumptions.csv")
+  penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
+  
+  # Load study area shapefile
+  study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
+  study_area <- st_read(study_area_path)
+  
+  # Load the NSIDC sea ice concentration data
+  nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
+  
+  # Filter the sea ice data from 1981 to 2023
+  start_date <- as.Date("1981-01-01")
+  end_date <- as.Date("2023-09-30")
+  nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+  
+  # Adjust the season column in the penguin abundance data
+  penguin_abundance_data <- penguin_abundance_data %>%
+    mutate(year = 1970 + season - 1)
+  
+  # Filter penguin data to keep only consecutively censused sites and clean duplicates
+  consecutively_censused <- penguin_data %>%
+    arrange(site_id, season) %>%
+    group_by(site_id) %>%
+    mutate(next_season = lead(season),
+           next_presence = lead(presence)) %>%
+    filter(presence == 1 & next_presence == 1 & season != next_season) %>%
+    ungroup() %>%
+    select(site_id, season, presence, next_season)
+  
+  # Merge with penguin abundance data
+  penguin_abundance_filtered <- penguin_abundance_data %>%
+    left_join(consecutively_censused, by = c("site_id", "year" = "season")) %>%
+    filter(!is.na(next_season))
+  
+  print("Penguin abundance data after filtering for consecutively censused sites:")
+  print(head(penguin_abundance_filtered)) # Debug print
+  
+  # Define home range directory
+  home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges"
+  home_range_files <- list.files(home_range_dir, pattern = "\\.shp$", full.names = TRUE)
+  
+  # Create results directory
+  results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results"
+  dir.create(results_dir, showWarnings = FALSE)
+  
+  # Initialize dataframes to store all results and significant results
+  all_results_df <- data.frame()
+  significant_results_df <- data.frame()
+  
+  # Loop through each home range shapefile and compute results
+  for (threshold in thresholds) {
+    for (buffer_path in home_range_files) {
+      home_range_size <- str_extract(buffer_path, "(\\d+)km")
+      metrics <- compute_extent_variability(buffer_path, nsidc, threshold = threshold)
+      results <- fit_gls_models(penguin_abundance_filtered, metrics)
+      
+      for (lag in 1:5) {
+        result <- results[[paste0("Lag_", lag)]]
+        result_df <- data.frame(
+          Threshold_Extent_Variability = threshold,
+          HomeRangeSize_Extent_Variability = home_range_size,
+          Lag_Extent_Variability = lag,
+          AIC_Extent_Variability = result$AIC,
+          BIC_Extent_Variability = result$BIC,
+          Coefficient_Intercept_Extent_Variability = result$coefficients[1, 1],
+          StdError_Intercept_Extent_Variability = result$coefficients[1, 2],
+          tValue_Intercept_Extent_Variability = result$coefficients[1, 3],
+          pValue_Intercept_Extent_Variability = result$coefficients[1, 4],
+          Coefficient_Extent_Variability = result$coefficients[2, 1],
+          StdError_Extent_Variability = result$coefficients[2, 2],
+          tValue_Extent_Variability = result$coefficients[2, 3],
+          pValue_Extent_Variability = result$p_value_variability,
+          Bonferroni_Adjusted_pValue_Extent_Variability = p.adjust(result$p_value_variability, method = "bonferroni", n = 5)
+        )
+        all_results_df <- rbind(all_results_df, result_df)
+      }
+    }
+  }
+  
+  # Filter significant results using dplyr
+  significant_results_df <- all_results_df %>%
+    filter(pValue_Extent_Variability < 0.05)
+  
+  # Export the compiled results to CSV
+  write.csv(all_results_df, file.path(results_dir, "model_results_sea_ice_extent_variability.csv"), row.names = FALSE)
+  
+  # Export the significant results to a separate CSV
+  write.csv(significant_results_df, file.path(results_dir, "significant_model_results_sea_ice_extent_variability.csv"), row.names = FALSE)
+}
+
+# Run the analysis
+analyze_sea_ice_effect(.15)
+
+
+```
+
+
+
+**Sea Ice Concentration Analysis (Home Range Analysis)** (updated) - consider adding different thresholds 
 ```{r}
 # Load necessary libraries
 library(terra)
@@ -343,14 +677,14 @@ for (size in home_range_sizes) {
   for (lag in names(results)) {
     result <- results[[lag]]
     result_df <- data.frame(
-      HomeRangeSize = size,
-      Lag = lag,
-      AIC = result$AIC,
-      BIC = result$BIC,
-      Coefficient_Intercept = result$coefficients[1, 1],
-      StdError_Intercept = result$coefficients[1, 2],
-      tValue_Intercept = result$coefficients[1, 3],
-      pValue_Intercept = result$coefficients[1, 4],
+      HomeRangeSize_SIC = size,
+      Lag_SIC = lag,
+      AIC_SIC = result$AIC,
+      BIC_SIC = result$BIC,
+      Coefficient_Intercept_SIC = result$coefficients[1, 1],
+      StdError_Intercept_SIC = result$coefficients[1, 2],
+      tValue_Intercept_SIC = result$coefficients[1, 3],
+      pValue_Intercept_SIC = result$coefficients[1, 4],
       Coefficient_SIC = result$coefficients[2, 1],
       StdError_SIC = result$coefficients[2, 2],
       tValue_SIC = result$coefficients[2, 3],
@@ -377,16 +711,9 @@ write.csv(significant_results_df, file.path(results_dir, "significant_model_resu
 ```
 
 
-
-
-**Gentoo Sea Ice Persistence (Proportion of Open Water Days) Analysis**
-
-    For each year in the study period, calculate the proportion of open water days (days with sea ice concentration below a threshold of 15%) during winter months
-
-Multi-Year Lag Effects
+**Sea Ice Concentration Variability** (updated) - consider adding different thresholds 
 
 ```{r}
-
 # Load necessary libraries
 library(terra)
 library(sf)
@@ -395,65 +722,76 @@ library(ggplot2)
 library(lubridate)
 library(nlme)
 
-# Function to compute mean sea ice persistence for all valid years within the specified buffer
-compute_mean_persistence <- function(buffer_path, nsidc, ice_threshold = .15, winter_months = c(6, 7, 8, 9)) {
+# Function to compute SD of sea ice persistence for all valid years within the specified buffer
+compute_sd_persistence <- function(buffer_path, nsidc, ice_thresholds = c(.15, .30, .50), winter_months = c(6, 7, 8, 9)) {
   combined_buffers_sf <- st_read(buffer_path)
   dissolved_buffer <- st_union(combined_buffers_sf)
   buffer_mask <- mask(nsidc, vect(dissolved_buffer))
   all_years <- unique(year(time(buffer_mask)))
   
-  mean_persistence_per_year <- data.frame(year = all_years, mean_persistence = NA)
+  calculate_persistence <- function(x, threshold) {
+    sum(x >= threshold, na.rm = TRUE)
+  }
+  
+  persistence_metrics_per_year <- data.frame(year = rep(all_years, each = length(ice_thresholds)), 
+                                             threshold = rep(ice_thresholds, times = length(all_years)),
+                                             persistence_sd = NA)
   
   for (year in all_years) {
     winter_data <- subset(buffer_mask, which(year(time(buffer_mask)) == year & month(time(buffer_mask)) %in% winter_months))
     if (nlyr(winter_data) > 0) {
-      # Calculate the proportion of open water days
-      open_water_prop <- app(winter_data, function(x) mean(x < ice_threshold, na.rm = TRUE))
-      mean_persistence <- global(open_water_prop, fun = mean, na.rm = TRUE)
-      mean_persistence_per_year$mean_persistence[mean_persistence_per_year$year == year] <- mean_persistence[1, 1]
+      for (threshold in ice_thresholds) {
+        persistence <- app(winter_data, function(x) calculate_persistence(x, threshold))
+        persistence_sd <- global(persistence, fun = sd, na.rm = TRUE)
+        persistence_metrics_per_year$persistence_sd[persistence_metrics_per_year$year == year & 
+                                                      persistence_metrics_per_year$threshold == threshold] <- persistence_sd[1, 1]
+      }
     }
   }
   
-  return(mean_persistence_per_year)
+  return(persistence_metrics_per_year)
 }
 
-# Function to get precomputed mean persistence
-get_precomputed_persistence <- function(years, mean_persistence_per_year) {
+# Function to get precomputed SD of persistence
+get_precomputed_persistence_sd <- function(years, threshold, persistence_metrics_per_year) {
   valid_years <- years[years >= 1980 & years <= 2022]
   if (length(valid_years) == 0) {
     return(NA)
   }
-  mean_persistence_values <- mean_persistence_per_year$mean_persistence[mean_persistence_per_year$year %in% valid_years]
-  if (length(mean_persistence_values) > 0) {
-    return(mean(mean_persistence_values, na.rm = TRUE))
+  persistence_sd_values <- persistence_metrics_per_year$persistence_sd[persistence_metrics_per_year$year %in% valid_years & 
+                                                                         persistence_metrics_per_year$threshold == threshold]
+  if (length(persistence_sd_values) > 0) {
+    return(mean(persistence_sd_values, na.rm = TRUE))
   } else {
     return(NA)
   }
 }
 
 # Function to fit GLS models and summarize results
-fit_gls_models <- function(penguin_abundance_filtered, mean_persistence_per_year) {
+fit_gls_models_sd <- function(penguin_abundance_filtered, persistence_metrics_per_year, ice_threshold) {
   penguin_abundance_filtered <- penguin_abundance_filtered %>%
     rowwise() %>%
-    mutate(overwinter_persistence_1yr = ifelse(year - 1 >= 1980, get_precomputed_persistence(year - 1, mean_persistence_per_year), NA),
-           overwinter_persistence_2yr = ifelse(year - 2 >= 1980, get_precomputed_persistence(c(year - 1, year - 2), mean_persistence_per_year), NA),
-           overwinter_persistence_3yr = ifelse(year - 3 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3), mean_persistence_per_year), NA),
-           overwinter_persistence_4yr = ifelse(year - 4 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3, year - 4), mean_persistence_per_year), NA),
-           overwinter_persistence_5yr = ifelse(year - 5 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3, year - 4, year - 5), mean_persistence_per_year), NA)) %>%
+    mutate(
+      overwinter_persistence_sd_1yr = ifelse(year - 1 >= 1980, get_precomputed_persistence_sd(year - 1, ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_sd_2yr = ifelse(year - 2 >= 1980, get_precomputed_persistence_sd(c(year - 1, year - 2), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_sd_3yr = ifelse(year - 3 >= 1980, get_precomputed_persistence_sd(c(year - 1, year - 2, year - 3), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_sd_4yr = ifelse(year - 4 >= 1980, get_precomputed_persistence_sd(c(year - 1, year - 2, year - 3, year - 4), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_sd_5yr = ifelse(year - 5 >= 1980, get_precomputed_persistence_sd(c(year - 1, year - 2, year - 3, year - 4, year - 5), ice_threshold, persistence_metrics_per_year), NA)
+    ) %>%
     ungroup() %>%
-    filter(!is.na(overwinter_persistence_1yr) & !is.na(overwinter_persistence_2yr) & !is.na(overwinter_persistence_3yr) & !is.na(overwinter_persistence_4yr) & !is.na(overwinter_persistence_5yr))
+    filter(!is.na(overwinter_persistence_sd_1yr) & !is.na(overwinter_persistence_sd_2yr) & !is.na(overwinter_persistence_sd_3yr) & !is.na(overwinter_persistence_sd_4yr) & !is.na(overwinter_persistence_sd_5yr))
   
   results <- list()
   
   for (lag in 1:5) {
-    formula <- as.formula(paste("growth_rate ~ overwinter_persistence_", lag, "yr", sep = ""))
+    formula <- as.formula(paste("growth_rate ~ overwinter_persistence_sd_", lag, "yr", sep = ""))
     model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
     summary_model <- summary(model)
     results[[paste("Lag", lag)]] <- list(
       AIC = AIC(model),
       BIC = BIC(model),
       coefficients = summary_model$tTable,
-      p_value = summary_model$tTable[2, 4]
+      p_values = summary_model$tTable[, 4]
     )
   }
   
@@ -475,7 +813,6 @@ nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmoniza
 start_date <- as.Date("1980-01-01")
 end_date <- as.Date("2023-09-30")
 nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
-
 
 # Adjust the season column in the penguin abundance data
 penguin_abundance_data <- penguin_abundance_data %>%
@@ -502,35 +839,422 @@ print(head(penguin_abundance_filtered)) # Debug print
 # Define home range directory and sizes
 home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges"
 home_range_sizes <- c(25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
-# home_range_sizes <- c(50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
+
+# Create results directory
+results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results"
+dir.create(results_dir, showWarnings = FALSE)
+
+# Initialize dataframes to store all results and significant results
+all_results_df <- data.frame()
+significant_results_df <- data.frame()
 
 # Loop through each home range size and compute results
-all_results <- list()
-
 for (size in home_range_sizes) {
   buffer_path <- file.path(home_range_dir, paste0("gepe_home_ranges_", size, "km.shp"))
-  mean_persistence_per_year <- compute_mean_persistence(buffer_path, nsidc)
-  results <- fit_gls_models(penguin_abundance_filtered, mean_persistence_per_year)
-  all_results[[paste(size, "km")]] <- results
+  persistence_metrics_per_year <- compute_sd_persistence(buffer_path, nsidc)
+  
+  for (threshold in c(.15, .30, .50)) {
+    results <- fit_gls_models_sd(penguin_abundance_filtered, persistence_metrics_per_year, threshold)
+    
+    for (lag in names(results)) {
+      result <- results[[lag]]
+      result_df <- data.frame(
+        HomeRangeSize = size,
+        Threshold = threshold,
+        Lag = lag,
+        AIC = result$AIC,
+        BIC = result$BIC,
+        Coefficient_Intercept = result$coefficients[1, 1],
+        StdError_Intercept = result$coefficients[1, 2],
+        tValue_Intercept = result$coefficients[1, 3],
+        pValue_Intercept = result$p_values[1],
+        Coefficient_Persistence_SD = result$coefficients[2, 1],
+        StdError_Persistence_SD = result$coefficients[2, 2],
+        tValue_Persistence_SD = result$coefficients[2, 3],
+        pValue_Persistence_SD = result$p_values[2],
+        Bonferroni_Adjusted_pValue_Persistence_SD = p.adjust(result$p_values[2], method = "bonferroni", n = 5)
+      )
+      all_results_df <- rbind(all_results_df, result_df)
+      
+      if (result_df$pValue_Persistence_SD < 0.05) {
+        significant_results_df <- rbind(significant_results_df, result_df)
+      }
+    }
+  }
 }
 
-# Print the results
-for (size in names(all_results)) {
-  cat("Home Range Size:", size, "\n")
-  for (lag in names(all_results[[size]])) {
-    cat(lag, "Lag:\n")
-    cat("  AIC:", all_results[[size]][[lag]]$AIC, "\n")
-    cat("  BIC:", all_results[[size]][[lag]]$BIC, "\n")
-    cat("  Coefficients:\n")
-    print(all_results[[size]][[lag]]$coefficients)
-    cat("  P-Value:", all_results[[size]][[lag]]$p_value, "\n")
-  }
-  cat("\n")
-}
+write.csv(all_results_df, file.path(results_dir, "model_results_sea_ice_persistence_sd.csv"), row.names = FALSE)
+write.csv(significant_results_df, file.path(results_dir, "significant_model_results_sea_ice_persistence_sd.csv"), row.names = FALSE)
+
+
 
 ```
 
-**Duration - Alone**
+
+
+**Gentoo Sea Ice Persistence (Proportion of Open Water Days) Analysis** (updated - needs checking) Need to implement the monthly calculations 
+
+    For each year in the study period, calculate the proportion of open water days (days with sea ice concentration below a threshold of 15%) during winter months
+
+
+```{r}
+# Load necessary libraries
+library(terra)
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(nlme)
+
+# Function to compute mean persistence for all valid years within the specified buffer
+compute_mean_persistence <- function(buffer_path, nsidc, ice_thresholds = c(.15, .30, .50), winter_months = c(6, 7, 8, 9)) {
+  combined_buffers_sf <- st_read(buffer_path)
+  dissolved_buffer <- st_union(combined_buffers_sf)
+  buffer_mask <- mask(nsidc, vect(dissolved_buffer))
+  all_years <- unique(year(time(buffer_mask)))
+  
+  calculate_persistence <- function(x, threshold) {
+    sum(x >= threshold, na.rm = TRUE)
+  }
+  
+  persistence_metrics_per_year <- data.frame(year = rep(all_years, each = length(ice_thresholds)), 
+                                             threshold = rep(ice_thresholds, times = length(all_years)),
+                                             mean_persistence = NA)
+  
+  for (year in all_years) {
+    winter_data <- subset(buffer_mask, which(year(time(buffer_mask)) == year & month(time(buffer_mask)) %in% winter_months))
+    if (nlyr(winter_data) > 0) {
+      for (threshold in ice_thresholds) {
+        persistence <- app(winter_data, function(x) calculate_persistence(x, threshold))
+        mean_persistence <- global(persistence, fun = mean, na.rm = TRUE)
+        persistence_metrics_per_year$mean_persistence[persistence_metrics_per_year$year == year & 
+                                                        persistence_metrics_per_year$threshold == threshold] <- mean_persistence[1, 1]
+      }
+    }
+  }
+  
+  return(persistence_metrics_per_year)
+}
+
+# Function to get precomputed mean persistence
+get_precomputed_persistence <- function(years, threshold, persistence_metrics_per_year) {
+  valid_years <- years[years >= 1980 & years <= 2022]
+  if (length(valid_years) == 0) {
+    return(NA)
+  }
+  mean_persistence_values <- persistence_metrics_per_year$mean_persistence[persistence_metrics_per_year$year %in% valid_years & 
+                                                                             persistence_metrics_per_year$threshold == threshold]
+  if (length(mean_persistence_values) > 0) {
+    return(mean(mean_persistence_values, na.rm = TRUE))
+  } else {
+    return(NA)
+  }
+}
+
+# Function to fit GLS models and summarize results
+fit_gls_models <- function(penguin_abundance_filtered, persistence_metrics_per_year, ice_threshold) {
+  penguin_abundance_filtered <- penguin_abundance_filtered %>%
+    rowwise() %>%
+    mutate(
+      overwinter_persistence_1yr = ifelse(year - 1 >= 1980, get_precomputed_persistence(year - 1, ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_2yr = ifelse(year - 2 >= 1980, get_precomputed_persistence(c(year - 1, year - 2), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_3yr = ifelse(year - 3 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_4yr = ifelse(year - 4 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3, year - 4), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_5yr = ifelse(year - 5 >= 1980, get_precomputed_persistence(c(year - 1, year - 2, year - 3, year - 4, year - 5), ice_threshold, persistence_metrics_per_year), NA)
+    ) %>%
+    ungroup() %>%
+    filter(!is.na(overwinter_persistence_1yr) & !is.na(overwinter_persistence_2yr) & !is.na(overwinter_persistence_3yr) & !is.na(overwinter_persistence_4yr) & !is.na(overwinter_persistence_5yr))
+  
+  results <- list()
+  
+  for (lag in 1:5) {
+    formula <- as.formula(paste("growth_rate ~ overwinter_persistence_", lag, "yr", sep = ""))
+    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
+    summary_model <- summary(model)
+    results[[paste("Lag", lag)]] <- list(
+      AIC = AIC(model),
+      BIC = BIC(model),
+      coefficients = summary_model$tTable,
+      p_values = summary_model$tTable[, 4]
+    )
+  }
+  
+  return(results)
+}
+
+# Load Gentoo penguin data
+penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/gentoo_presence_absence_assumptions.csv")
+penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
+
+# Load study area shapefile
+study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
+study_area <- st_read(study_area_path)
+
+# Load the NSIDC sea ice concentration data
+nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
+
+# Filter the sea ice data from 1980 to 2022
+start_date <- as.Date("1980-01-01")
+end_date <- as.Date("2023-09-30")
+nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+
+# Adjust the season column in the penguin abundance data
+penguin_abundance_data <- penguin_abundance_data %>%
+  mutate(year = 1970 + season - 1)
+
+# Filter penguin data to keep only consecutively censused sites and clean duplicates
+consecutively_censused <- penguin_data %>%
+  arrange(site_id, season) %>%
+  group_by(site_id) %>%
+  mutate(next_season = lead(season),
+         next_presence = lead(presence)) %>%
+  filter(presence == 1 & next_presence == 1 & season != next_season) %>%
+  ungroup() %>%
+  select(site_id, season, presence, next_season)
+
+# Merge with penguin abundance data
+penguin_abundance_filtered <- penguin_abundance_data %>%
+  left_join(consecutively_censused, by = c("site_id", "year" = "season")) %>%
+  filter(!is.na(next_season))
+
+print("Penguin abundance data after filtering for consecutively censused sites:")
+print(head(penguin_abundance_filtered)) # Debug print
+
+# Define home range directory and sizes
+home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges"
+home_range_sizes <- c(25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
+
+# Create results directory
+results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results"
+dir.create(results_dir, showWarnings = FALSE)
+
+# Initialize dataframes to store all results and significant results
+all_results_df <- data.frame()
+significant_results_df <- data.frame()
+
+# Loop through each home range size and compute results
+for (size in home_range_sizes) {
+  buffer_path <- file.path(home_range_dir, paste0("gepe_home_ranges_", size, "km.shp"))
+  persistence_metrics_per_year <- compute_mean_persistence(buffer_path, nsidc)
+  
+  for (threshold in c(.15, .30, .50)) {
+    results <- fit_gls_models(penguin_abundance_filtered, persistence_metrics_per_year, threshold)
+    
+    for (lag in names(results)) {
+      result <- results[[lag]]
+      result_df <- data.frame(
+        HomeRangeSize = size,
+        Threshold = threshold,
+        Lag = lag,
+        AIC = result$AIC,
+        BIC = result$BIC,
+        Coefficient_Intercept = result$coefficients[1, 1],
+        StdError_Intercept = result$coefficients[1, 2],
+        tValue_Intercept = result$coefficients[1, 3],
+        pValue_Intercept = result$p_values[1],
+        Coefficient_Persistence = result$coefficients[2, 1],
+        StdError_Persistence = result$coefficients[2, 2],
+        tValue_Persistence = result$coefficients[2, 3],
+        pValue_Persistence = result$p_values[2],
+        Bonferroni_Adjusted_pValue_Persistence = p.adjust(result$p_values[2], method = "bonferroni", n = 5)
+      )
+      all_results_df <- rbind(all_results_df, result_df)
+      
+      if (result_df$pValue_Persistence < 0.05) {
+        significant_results_df <- rbind(significant_results_df, result_df)
+      }
+    }
+  }
+}
+
+write.csv(all_results_df, file.path(results_dir, "model_results_sea_ice_persistence.csv"), row.names = FALSE)
+write.csv(significant_results_df, file.path(results_dir, "significant_model_results_sea_ice_persistence.csv"), row.names = FALSE)
+
+
+```
+
+
+***Persistence Varaibility** (updated - needs checking) Need to implement the monthly calculations 
+```{r}
+# Load necessary libraries
+library(terra)
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(nlme)
+
+# Function to compute SD of sea ice persistence for all valid years within the specified buffer
+compute_sd_persistence <- function(buffer_path, nsidc, ice_thresholds = c(.15, .30, .50), winter_months = c(6, 7, 8, 9)) {
+  combined_buffers_sf <- st_read(buffer_path)
+  dissolved_buffer <- st_union(combined_buffers_sf)
+  buffer_mask <- mask(nsidc, vect(dissolved_buffer))
+  all_years <- unique(year(time(buffer_mask)))
+  
+  calculate_persistence <- function(x, threshold) {
+    sum(x >= threshold, na.rm = TRUE)
+  }
+  
+  persistence_metrics_per_year <- data.frame(year = rep(all_years, each = length(ice_thresholds)), 
+                                             threshold = rep(ice_thresholds, times = length(all_years)),
+                                             persistence_sd = NA)
+  
+  for (year in all_years) {
+    winter_data <- subset(buffer_mask, which(year(time(buffer_mask)) == year & month(time(buffer_mask)) %in% winter_months))
+    if (nlyr(winter_data) > 0) {
+      for (threshold in ice_thresholds) {
+        persistence <- app(winter_data, function(x) calculate_persistence(x, threshold))
+        persistence_sd <- global(persistence, fun = sd, na.rm = TRUE)
+        persistence_metrics_per_year$persistence_sd[persistence_metrics_per_year$year == year & 
+                                                      persistence_metrics_per_year$threshold == threshold] <- persistence_sd[1, 1]
+      }
+    }
+  }
+  
+  return(persistence_metrics_per_year)
+}
+
+# Function to get precomputed SD of persistence
+get_precomputed_persistence_sd <- function(years, threshold, persistence_metrics_per_year) {
+  valid_years <- years[years >= 1980 & years <= 2022]
+  if (length(valid_years) == 0) {
+    return(NA)
+  }
+  persistence_sd_values <- persistence_metrics_per_year$persistence_sd[persistence_metrics_per_year$year %in% valid_years & 
+                                                                         persistence_metrics_per_year$threshold == threshold]
+  if (length(persistence_sd_values) > 0) {
+    return(mean(persistence_sd_values, na.rm = TRUE))
+  } else {
+    return(NA)
+  }
+}
+
+# Function to fit GLS models and summarize results
+fit_gls_models_sd <- function(penguin_abundance_filtered, persistence_metrics_per_year, ice_threshold) {
+  penguin_abundance_filtered <- penguin_abundance_filtered %>%
+    rowwise() %>%
+    mutate(
+      overwinter_persistence_sd_1yr = ifelse(year - 1 >= 1980, get_precomputed_persistence_sd(year - 1, ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_sd_2yr = ifelse(year - 2 >= 1980, get_precomputed_persistence_sd(c(year - 1, year - 2), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_sd_3yr = ifelse(year - 3 >= 1980, get_precomputed_persistence_sd(c(year - 1, year - 2, year - 3), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_sd_4yr = ifelse(year - 4 >= 1980, get_precomputed_persistence_sd(c(year - 1, year - 2, year - 3, year - 4), ice_threshold, persistence_metrics_per_year), NA),
+      overwinter_persistence_sd_5yr = ifelse(year - 5 >= 1980, get_precomputed_persistence_sd(c(year - 1, year - 2, year - 3, year - 4, year - 5), ice_threshold, persistence_metrics_per_year), NA)
+    ) %>%
+    ungroup() %>%
+    filter(!is.na(overwinter_persistence_sd_1yr) & !is.na(overwinter_persistence_sd_2yr) & !is.na(overwinter_persistence_sd_3yr) & !is.na(overwinter_persistence_sd_4yr) & !is.na(overwinter_persistence_sd_5yr))
+  
+  results <- list()
+  
+  for (lag in 1:5) {
+    formula <- as.formula(paste("growth_rate ~ overwinter_persistence_sd_", lag, "yr", sep = ""))
+    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_abundance_filtered)
+    summary_model <- summary(model)
+    results[[paste("Lag", lag)]] <- list(
+      AIC = AIC(model),
+      BIC = BIC(model),
+      coefficients = summary_model$tTable,
+      p_values = summary_model$tTable[, 4]
+    )
+  }
+  
+  return(results)
+}
+
+# Load Gentoo penguin data
+penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/gentoo_presence_absence_assumptions.csv")
+penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
+
+# Load study area shapefile
+study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
+study_area <- st_read(study_area_path)
+
+# Load the NSIDC sea ice concentration data
+nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
+
+# Filter the sea ice data from 1980 to 2022
+start_date <- as.Date("1980-01-01")
+end_date <- as.Date("2023-09-30")
+nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
+
+# Adjust the season column in the penguin abundance data
+penguin_abundance_data <- penguin_abundance_data %>%
+  mutate(year = 1970 + season - 1)
+
+# Filter penguin data to keep only consecutively censused sites and clean duplicates
+consecutively_censused <- penguin_data %>%
+  arrange(site_id, season) %>%
+  group_by(site_id) %>%
+  mutate(next_season = lead(season),
+         next_presence = lead(presence)) %>%
+  filter(presence == 1 & next_presence == 1 & season != next_season) %>%
+  ungroup() %>%
+  select(site_id, season, presence, next_season)
+
+# Merge with penguin abundance data
+penguin_abundance_filtered <- penguin_abundance_data %>%
+  left_join(consecutively_censused, by = c("site_id", "year" = "season")) %>%
+  filter(!is.na(next_season))
+
+print("Penguin abundance data after filtering for consecutively censused sites:")
+print(head(penguin_abundance_filtered)) # Debug print
+
+# Define home range directory and sizes
+home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges"
+home_range_sizes <- c(25, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500)
+
+# Create results directory
+results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results"
+dir.create(results_dir, showWarnings = FALSE)
+
+# Initialize dataframes to store all results and significant results
+all_results_df <- data.frame()
+significant_results_df <- data.frame()
+
+# Loop through each home range size and compute results
+for (size in home_range_sizes) {
+  buffer_path <- file.path(home_range_dir, paste0("gepe_home_ranges_", size, "km.shp"))
+  persistence_metrics_per_year <- compute_sd_persistence(buffer_path, nsidc)
+  
+  for (threshold in c(.15, .30, .50)) {
+    results <- fit_gls_models_sd(penguin_abundance_filtered, persistence_metrics_per_year, threshold)
+    
+    for (lag in names(results)) {
+      result <- results[[lag]]
+      result_df <- data.frame(
+        HomeRangeSize = size,
+        Threshold = threshold,
+        Lag = lag,
+        AIC = result$AIC,
+        BIC = result$BIC,
+        Coefficient_Intercept = result$coefficients[1, 1],
+        StdError_Intercept = result$coefficients[1, 2],
+        tValue_Intercept = result$coefficients[1, 3],
+        pValue_Intercept = result$p_values[1],
+        Coefficient_Persistence_SD = result$coefficients[2, 1],
+        StdError_Persistence_SD = result$coefficients[2, 2],
+        tValue_Persistence_SD = result$coefficients[2, 3],
+        pValue_Persistence_SD = result$p_values[2],
+        Bonferroni_Adjusted_pValue_Persistence_SD = p.adjust(result$p_values[2], method = "bonferroni", n = 5)
+      )
+      all_results_df <- rbind(all_results_df, result_df)
+      
+      if (result_df$pValue_Persistence_SD < 0.05) {
+        significant_results_df <- rbind(significant_results_df, result_df)
+      }
+    }
+  }
+}
+
+write.csv(all_results_df, file.path(results_dir, "model_results_sea_ice_persistence_sd.csv"), row.names = FALSE)
+write.csv(significant_results_df, file.path(results_dir, "significant_model_results_sea_ice_persistence_sd.csv"), row.names = FALSE)
+
+
+```
+
+
+
+
+**Sea Ice Duration** (updated) - Need to implement the monthly calculations 
 
 ```{r}
 # Load necessary libraries
@@ -541,7 +1265,7 @@ library(nlme)
 library(stringr)
 
 # Function to compute mean duration of sea ice concentration above a threshold
-compute_mean_duration <- function(buffer_path, nsidc, threshold = 15, winter_months = c(6, 7, 8, 9)) {
+compute_mean_duration <- function(buffer_path, nsidc, threshold = .15, winter_months = c(6, 7, 8, 9)) {
   combined_buffers_sf <- st_read(buffer_path)
   dissolved_buffer <- st_union(combined_buffers_sf)
   buffer_mask <- mask(nsidc, vect(dissolved_buffer))
@@ -601,15 +1325,15 @@ fit_gls_models <- function(penguin_abundance_filtered, duration_metrics) {
 # Main analysis function
 analyze_sea_ice_effect <- function(thresholds) {
   # Load Gentoo penguin data
-  penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
-  penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
+  penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/gentoo_presence_absence_assumptions.csv")
+  penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
   
   # Load study area shapefile
-  study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
+  study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
   study_area <- st_read(study_area_path)
   
   # Load the NSIDC sea ice concentration data
-  nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+  nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
   
   # Filter the sea ice data from 2005 to 2023
   start_date <- as.Date("1981-01-01")
@@ -639,48 +1363,72 @@ analyze_sea_ice_effect <- function(thresholds) {
   print(head(penguin_abundance_filtered)) # Debug print
   
   # Define home range directory
-  home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo-home-ranges-updated/"
+  home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges"
   home_range_files <- list.files(home_range_dir, pattern = "\\.shp$", full.names = TRUE)
   
-  # Loop through each home range shapefile and compute results
-  all_results <- list()
-  significant_results <- list()
+  # Create results directory
+  results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results"
+  dir.create(results_dir, showWarnings = FALSE)
   
+  # Initialize dataframes to store all results and significant results
+  all_results_df <- data.frame()
+  significant_results_df <- data.frame()
+  
+  # Loop through each home range shapefile and compute results
   for (threshold in thresholds) {
-    threshold_results <- list()
     for (buffer_path in home_range_files) {
       home_range_size <- str_extract(buffer_path, "(\\d+)km")
       duration_metrics <- compute_mean_duration(buffer_path, nsidc, threshold = threshold)
       results <- fit_gls_models(penguin_abundance_filtered, duration_metrics)
-      threshold_results[[home_range_size]] <- results
       
-      # Check for significant instances
       for (lag in 1:5) {
-        p_value <- results[[paste0("Lag_", lag)]]$p_value
-        if (p_value < 0.05) {
-          significant_results[[paste0("Threshold_", threshold, "_", home_range_size, "_Lag_", lag)]] <- results[[paste0("Lag_", lag)]]
+        result <- results[[paste0("Lag_", lag)]]
+        result_df <- data.frame(
+          Threshold_Duration = threshold,
+          HomeRangeSize_Duration = home_range_size,
+          Lag_Duration = lag,
+          AIC_Duration = result$AIC,
+          BIC_Duration = result$BIC,
+          Coefficient_Intercept_Duration = result$coefficients[1, 1],
+          StdError_Intercept_Duration = result$coefficients[1, 2],
+          tValue_Intercept_Duration = result$coefficients[1, 3],
+          pValue_Intercept_Duration = result$coefficients[1, 4],
+          Coefficient_Duration = result$coefficients[2, 1],
+          StdError_Duration = result$coefficients[2, 2],
+          tValue_Duration = result$coefficients[2, 3],
+          pValue_Duration = result$coefficients[2, 4],
+          Bonferroni_Adjusted_pValue_Duration = p.adjust(result$coefficients[2, 4], method = "bonferroni", n = 5)
+        )
+        all_results_df <- rbind(all_results_df, result_df)
+        
+        # Check if the result is significant
+        if (result_df$pValue_Duration < 0.05) {
+          significant_results_df <- rbind(significant_results_df, result_df)
         }
       }
     }
-    all_results[[paste0("Threshold_", threshold)]] <- threshold_results
   }
   
-  return(list(all_results = all_results, significant_results = significant_results))
+  # Export the compiled results to CSV
+  write.csv(all_results_df, file.path(results_dir, "model_results_sea_ice_duration.csv"), row.names = FALSE)
+  
+  # Export the significant results to a separate CSV
+  write.csv(significant_results_df, file.path(results_dir, "significant_model_results_sea_ice_duration.csv"), row.names = FALSE)
 }
 
 # Example usage
-thresholds <- c(15, 30, 50)  # You can change the thresholds here
+thresholds <- c(.15, .30, .50)  # You can change the thresholds here
 results <- analyze_sea_ice_effect(thresholds)
-print(results$all_results)
-print("Significant Results:")
-print(results$significant_results)
+
 
 
 
 
 ```
 
-**Sea Ice Duration Variability**
+**Sea Ice Duration Variability** - Need to implement the monthly calculations 
+
+In the provided script, variability is calculated by first identifying durations of consecutive days where sea ice concentration exceeds a given threshold. This is achieved using the rle (run-length encoding) function to find runs of days meeting the threshold. For each year, the mean duration of these runs is computed. The standard deviation (SD) of these durations is then calculated to quantify the variability, providing a measure of how consistent the durations of sea ice persistence are across different years. This SD is used as a metric of variability in subsequent analyses.
 
 ```{r}
 # Load necessary libraries
@@ -689,10 +1437,10 @@ library(sf)
 library(dplyr)
 library(nlme)
 library(stringr)
-library(lubridate)  # Add this line to load the lubridate package
+library(lubridate)
 
 # Function to compute mean duration and variability of sea ice concentration above a threshold
-compute_duration_and_variability <- function(buffer_path, nsidc, threshold = 15, winter_months = c(6, 7, 8, 9)) {
+compute_duration_and_variability <- function(buffer_path, nsidc, threshold, winter_months = c(6, 7, 8, 9)) {
   combined_buffers_sf <- st_read(buffer_path)
   dissolved_buffer <- st_union(combined_buffers_sf)
   buffer_mask <- mask(nsidc, vect(dissolved_buffer))
@@ -756,17 +1504,18 @@ fit_gls_models <- function(penguin_abundance_filtered, metrics) {
 # Main analysis function
 analyze_sea_ice_effect <- function(thresholds) {
   # Load Gentoo penguin data
-  penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")
-  penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/modeled_gentoo_parameters.csv")
+  penguin_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/gentoo_presence_absence_assumptions.csv")
+  penguin_abundance_data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
   
   # Load study area shapefile
-  study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/subregions/Frostbound_AQ_Subregions_EPSG_3976.shp"
+  study_area_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
   study_area <- st_read(study_area_path)
   
   # Load the NSIDC sea ice concentration data
-  nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/25km_Sea-Ice-Index/stack/substack/NSIDC_25km_Full_Study_Area.nc")
+  nsidc <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
   
-  # Filter the sea ice data from 2005 to 2023
+  
+  # Filter the sea ice data from 1981 to 2023
   start_date <- as.Date("1981-01-01")
   end_date <- as.Date("2023-09-30")
   nsidc <- subset(nsidc, which(time(nsidc) >= start_date & time(nsidc) <= end_date))
@@ -794,42 +1543,108 @@ analyze_sea_ice_effect <- function(thresholds) {
   print(head(penguin_abundance_filtered)) # Debug print
   
   # Define home range directory
-  home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo-home-ranges-updated/"
+  home_range_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/home-ranges"
   home_range_files <- list.files(home_range_dir, pattern = "\\.shp$", full.names = TRUE)
   
-  # Loop through each home range shapefile and compute results
-  all_results <- list()
-  significant_results <- list()
+  # Create results directory
+  results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results"
+  dir.create(results_dir, showWarnings = FALSE)
   
+  # Initialize dataframes to store all results and significant results
+  all_results_df <- data.frame()
+  significant_results_df <- data.frame()
+  
+  # Loop through each home range shapefile and compute results
   for (threshold in thresholds) {
-    threshold_results <- list()
     for (buffer_path in home_range_files) {
       home_range_size <- str_extract(buffer_path, "(\\d+)km")
       metrics <- compute_duration_and_variability(buffer_path, nsidc, threshold = threshold)
       results <- fit_gls_models(penguin_abundance_filtered, metrics)
-      threshold_results[[home_range_size]] <- results
       
-      # Check for significant instances
       for (lag in 1:5) {
-        p_value_duration <- results[[paste0("Lag_", lag)]]$p_value_duration
-        p_value_variability <- results[[paste0("Lag_", lag)]]$p_value_variability
-        if (p_value_duration < 0.05 | p_value_variability < 0.05) {
-          significant_results[[paste0("Threshold_", threshold, "_", home_range_size, "_Lag_", lag)]] <- results[[paste0("Lag_", lag)]]
-        }
+        result <- results[[paste0("Lag_", lag)]]
+        result_df <- data.frame(
+          Threshold_Duration = threshold,
+          HomeRangeSize_Duration = home_range_size,
+          Lag_Duration = lag,
+          AIC_Duration = result$AIC,
+          BIC_Duration = result$BIC,
+          Coefficient_Intercept_Duration = result$coefficients[1, 1],
+          StdError_Intercept_Duration = result$coefficients[1, 2],
+          tValue_Intercept_Duration = result$coefficients[1, 3],
+          pValue_Intercept_Duration = result$coefficients[1, 4],
+          Coefficient_Duration = result$coefficients[2, 1],
+          StdError_Duration = result$coefficients[2, 2],
+          tValue_Duration = result$coefficients[2, 3],
+          pValue_Duration = result$p_value_duration,
+          Bonferroni_Adjusted_pValue_Duration = p.adjust(result$p_value_duration, method = "bonferroni", n = 5),
+          Coefficient_Duration-Variability = result$coefficients[3, 1],
+          StdError_Duration-Variability = result$coefficients[3, 2],
+          tValue_Duration-Variability= result$coefficients[3, 3],
+          pValue_Duration-Variability = result$p_value_variability,
+          Bonferroni_Adjusted_pValue_Duration-Variability = p.adjust(result$p_value_variability, method = "bonferroni", n = 5)
+        )
+        all_results_df <- rbind(all_results_df, result_df)
       }
     }
-    all_results[[paste0("Threshold_", threshold)]] <- threshold_results
   }
   
-  return(list(all_results = all_results, significant_results = significant_results))
+  # Filter significant results using dplyr
+  significant_results_df <- all_results_df %>%
+    filter(pValue_Duration < 0.05 | pValue_Variability < 0.05)
+  
+  # Export the compiled results to CSV
+  write.csv(all_results_df, file.path(results_dir, "model_results_sea_ice_duration_variability.csv"), row.names = FALSE)
+  
+  # Export the significant results to a separate CSV
+  write.csv(significant_results_df, file.path(results_dir, "significant_model_results_sea_ice_duration_variability.csv"), row.names = FALSE)
 }
 
 # Example usage
-thresholds <- c(15, 30, 50)  # You can change the thresholds here
+thresholds <- c(.15, .30, .50)  # You can change the thresholds here
 results <- analyze_sea_ice_effect(thresholds)
+print("All Results:")
 print(results$all_results)
 print("Significant Results:")
 print(results$significant_results)
+```
+
+**Compile Significant Results**
+```{r}
+
+# Load necessary libraries
+library(dplyr)
+library(readr)
+
+# Define the directory containing the CSV files
+results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/significant"
+
+# Get a list of all CSV files in the directory
+csv_files <- list.files(path = results_dir, pattern = "*.csv", full.names = TRUE)
+
+# Initialize an empty list to store the dataframes
+dfs <- list()
+
+# Loop through each CSV file and read the data
+for (file in csv_files) {
+  # Read the current CSV file using readr
+  df <- read_csv(file, col_types = cols(.default = "c"))  # Read all columns as character
+  
+  # Append the dataframe to the list
+  dfs <- append(dfs, list(df))
+}
+
+# Combine all dataframes into one, filling missing columns with NA
+combined_results_df <- bind_rows(dfs)
+
+# Define the output file path
+output_file <- file.path(results_dir, "combined_significant_results.csv")
+
+# Export the combined results to a new CSV file
+write_csv(combined_results_df, output_file)
+
+# Print a message indicating the completion of the process
+cat("Combined results have been saved to:", output_file, "\n")
 
 
 ```
