@@ -768,29 +768,27 @@ fit_gls_models_avg <- function(penguin_data, ice_data, metric) {
 
 # Function 2: Fit GLS models for individual lag years
 fit_gls_models_indiv <- function(penguin_data, ice_data, metric) {
-  penguin_data <- penguin_data %>%
-    rowwise() %>%
-    mutate(
-      overwinter_ice_indiv_1yr = get_individual_ice_metrics(year - 1, ice_data, metric),
-      overwinter_ice_indiv_2yr = get_individual_ice_metrics(year - 2, ice_data, metric),
-      overwinter_ice_indiv_3yr = get_individual_ice_metrics(year - 3, ice_data, metric),
-      overwinter_ice_indiv_4yr = get_individual_ice_metrics(year - 4, ice_data, metric),
-      overwinter_ice_indiv_5yr = get_individual_ice_metrics(year - 5, ice_data, metric)
-    ) %>%
-    ungroup() %>%
-    filter(if_all(starts_with("overwinter_ice_indiv"), ~ !is.na(.)))
+  results <- list()
   
-  print("Fitting GLS model for individual lag years")
-  formula_indiv <- as.formula("growth_rate ~ overwinter_ice_indiv_1yr + overwinter_ice_indiv_2yr + overwinter_ice_indiv_3yr + overwinter_ice_indiv_4yr + overwinter_ice_indiv_5yr")
-  model_indiv <- gls(formula_indiv, correlation = corAR1(form = ~1 | site_id), data = penguin_data)
-  summary_model_indiv <- summary(model_indiv)
-  
-  results <- list(
-    AIC = AIC(model_indiv),
-    BIC = BIC(model_indiv),
-    coefficients = summary_model_indiv$tTable,
-    p_value = summary_model_indiv$tTable[2:6, 4]
-  )
+  for (lag in 1:5) {
+    penguin_data <- penguin_data %>%
+      rowwise() %>%
+      mutate(overwinter_ice = get_individual_ice_metrics(year - lag, ice_data, metric)) %>%
+      ungroup() %>%
+      filter(!is.na(overwinter_ice))
+    
+    print(paste("Fitting GLS model for individual lag", lag, "year(s)"))
+    formula <- as.formula("growth_rate ~ overwinter_ice")
+    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_data)
+    summary_model <- summary(model)
+    
+    results[[paste("Lag_Indiv", lag)]] <- list(
+      AIC = AIC(model),
+      BIC = BIC(model),
+      coefficients = summary_model$tTable,
+      p_value = summary_model$tTable[2, 4]
+    )
+  }
   
   return(results)
 }
@@ -853,46 +851,29 @@ run_gls_analysis <- function(penguin_abundance_data, ice_data, metrics, results_
         # Store results for individual lag years
         all_gls_results_indiv[[paste("Annual_Indiv", metric, threshold, home_range_size, sep = "_")]] <- gls_results_indiv
         
-        results_list_indiv <- data.frame(
-          Metric = metric,
-          HomeRangeSize = home_range_size,
-          Threshold = threshold,
-          Lag = "Individual",
-          AIC = gls_results_indiv$AIC,
-          BIC = gls_results_indiv$BIC,
-          Coefficient_Intercept = gls_results_indiv$coefficients[1, 1],
-          StdError_Intercept = gls_results_indiv$coefficients[1, 2],
-          tValue_Intercept = gls_results_indiv$coefficients[1, 3],
-          pValue_Intercept = gls_results_indiv$coefficients[1, 4],
-          Coefficient_1yr = gls_results_indiv$coefficients[2, 1],
-          StdError_1yr = gls_results_indiv$coefficients[2, 2],
-          tValue_1yr = gls_results_indiv$coefficients[2, 3],
-          pValue_1yr = gls_results_indiv$coefficients[2, 4],
-          Coefficient_2yr = gls_results_indiv$coefficients[3, 1],
-          StdError_2yr = gls_results_indiv$coefficients[3, 2],
-          tValue_2yr = gls_results_indiv$coefficients[3, 3],
-          pValue_2yr = gls_results_indiv$coefficients[3, 4],
-          Coefficient_3yr = gls_results_indiv$coefficients[4, 1],
-          StdError_3yr = gls_results_indiv$coefficients[4, 2],
-          tValue_3yr = gls_results_indiv$coefficients[4, 3],
-          pValue_3yr = gls_results_indiv$coefficients[4, 4],
-          Coefficient_4yr = gls_results_indiv$coefficients[5, 1],
-          StdError_4yr = gls_results_indiv$coefficients[5, 2],
-          tValue_4yr = gls_results_indiv$coefficients[5, 3],
-          pValue_4yr = gls_results_indiv$coefficients[5, 4],
-          Coefficient_5yr = gls_results_indiv$coefficients[6, 1],
-          StdError_5yr = gls_results_indiv$coefficients[6, 2],
-          tValue_5yr = gls_results_indiv$coefficients[6, 3],
-          pValue_5yr = gls_results_indiv$coefficients[6, 4],
-          Bonferroni_Adjusted_pValue_1yr = p.adjust(gls_results_indiv$coefficients[2, 4], method = "bonferroni", n = 5),
-          Bonferroni_Adjusted_pValue_2yr = p.adjust(gls_results_indiv$coefficients[3, 4], method = "bonferroni", n = 5),
-          Bonferroni_Adjusted_pValue_3yr = p.adjust(gls_results_indiv$coefficients[4, 4], method = "bonferroni", n = 5),
-          Bonferroni_Adjusted_pValue_4yr = p.adjust(gls_results_indiv$coefficients[5, 4], method = "bonferroni", n = 5),
-          Bonferroni_Adjusted_pValue_5yr = p.adjust(gls_results_indiv$coefficients[6, 4], method = "bonferroni", n = 5)
-        )
+        results_list_indiv <- lapply(names(gls_results_indiv), function(lag) {
+          result <- gls_results_indiv[[lag]]
+          data.frame(
+            Metric = metric,
+            HomeRangeSize = home_range_size,
+            Threshold = threshold,
+            Lag = lag,
+            AIC = result$AIC,
+            BIC = result$BIC,
+            Coefficient_Intercept = result$coefficients[1, 1],
+            StdError_Intercept = result$coefficients[1, 2],
+            tValue_Intercept = result$coefficients[1, 3],
+            pValue_Intercept = result$coefficients[1, 4],
+            Coefficient = result$coefficients[2, 1],
+            StdError = result$coefficients[2, 2],
+            tValue = result$coefficients[2, 3],
+            pValue = result$coefficients[2, 4],
+            Bonferroni_Adjusted_pValue = p.adjust(result$coefficients[2, 4], method = "bonferroni", n = 5)
+          )
+        })
         
-        all_results_df_indiv <- append(all_results_df_indiv, list(results_list_indiv))
-        significant_results_df_indiv <- append(significant_results_df_indiv, Filter(function(x) any(x$pValue_1yr < 0.05, x$pValue_2yr < 0.05, x$pValue_3yr < 0.05, x$pValue_4yr < 0.05, x$pValue_5yr < 0.05), list(results_list_indiv)))
+        all_results_df_indiv <- append(all_results_df_indiv, results_list_indiv)
+        significant_results_df_indiv <- append(significant_results_df_indiv, Filter(function(x) x$pValue < 0.05, results_list_indiv))
       }
     }
   }
@@ -904,18 +885,18 @@ run_gls_analysis <- function(penguin_abundance_data, ice_data, metrics, results_
   all_results_df_indiv <- do.call(rbind, all_results_df_indiv)
   significant_results_df_indiv <- do.call(rbind, significant_results_df_indiv)
   
-  write.csv(all_results_df_avg, file.path(results_dir, "model_results_persistence-duration_avg_ice_metrics.csv"), row.names = FALSE)
-  write.csv(significant_results_df_avg, file.path(results_dir, "significant_model_resultspersistence-duration_avg_ice_metrics.csv"), row.names = FALSE)
+  write.csv(all_results_df_avg, file.path(results_dir, "model_results_avg_ice_metrics.csv"), row.names = FALSE)
+  write.csv(significant_results_df_avg, file.path(results_dir, "significant_model_results_avg_ice_metrics.csv"), row.names = FALSE)
   
-  write.csv(all_results_df_indiv, file.path(results_dir, "model_results_persistence-duration_indiv_ice_metrics.csv"), row.names = FALSE)
-  write.csv(significant_results_df_indiv, file.path(results_dir, "significant_model_results_persistence-duration_indiv_ice_metrics.csv"), row.names = FALSE)
+  write.csv(all_results_df_indiv, file.path(results_dir, "model_results_indiv_ice_metrics.csv"), row.names = FALSE)
+  write.csv(significant_results_df_indiv, file.path(results_dir, "significant_model_results_indiv_ice_metrics.csv"), row.names = FALSE)
   
   # Save results
   saveRDS(all_gls_results_avg, file.path(results_dir, "gls_analysis_results_avg.rds"))
   saveRDS(all_gls_results_indiv, file.path(results_dir, "gls_analysis_results_indiv.rds"))
 }
 
-### Load Data and Run Analysis
+# Example Usage for a Small Subset
 
 # Load Gentoo penguin data
 penguin_abundance_data <- fread("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
@@ -935,8 +916,77 @@ metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence
 results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
 dir.create(results_dir, showWarnings = FALSE)
 
-# Run the GLS analysis on the full dataset
+
+
 run_gls_analysis(penguin_abundance_data, ice_data, metrics, results_dir)
+
+
+```
+
+
+
+**Compile and organize Significant Results**
+```{r}
+# Load necessary libraries
+library(data.table)
+library(dplyr)
+
+# Define the directory paths
+results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
+significant_results_dir <- file.path(results_dir, "bonferroni_significant_results")
+
+# Create the new subdirectory if it doesn't exist
+dir.create(significant_results_dir, showWarnings = FALSE)
+
+# Function to clean HomeRangeSize column
+clean_home_range_size <- function(df) {
+  df %>%
+    mutate(HomeRangeSize = as.numeric(gsub("km", "", HomeRangeSize)))
+}
+
+# Function to create subsets of data based on Bonferroni significance criteria and Metric
+subset_significant_results <- function(file_path) {
+  # Load the data
+  data <- fread(file_path)
+  
+  # Clean the HomeRangeSize column
+  data <- clean_home_range_size(data)
+  
+  # Get unique metrics
+  metrics <- unique(data$Metric)
+  
+  # Initialize a list to store subsets
+  metric_data_list <- list()
+  
+  # Loop through each metric and create subset
+  for (metric in metrics) {
+    metric_data <- data %>%
+      filter(Metric == metric, Bonferroni_Adjusted_pValue < 0.05)
+    
+    if (nrow(metric_data) > 0) {
+      metric_data_list[[metric]] <- metric_data
+    }
+  }
+  
+  return(metric_data_list)
+}
+
+# Get a list of CSV files in the directory
+csv_files <- list.files(path = results_dir, pattern = "*.csv", full.names = TRUE)
+
+# Apply the function to each CSV file and bind the results by Metric
+all_significant_results <- lapply(csv_files, subset_significant_results)
+all_significant_results <- do.call(rbind, unlist(all_significant_results, recursive = FALSE))
+
+# Split the data by Metric and save to separate CSV files
+split_data <- split(all_significant_results, all_significant_results$Metric)
+
+# Save each subset to a separate CSV file
+lapply(names(split_data), function(metric) {
+  output_file_name <- paste0(metric, "_bonferroni_significant.csv")
+  output_file_path <- file.path(significant_results_dir, output_file_name)
+  write.csv(split_data[[metric]], output_file_path, row.names = FALSE)
+})
 
 
 ```
