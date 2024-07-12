@@ -739,7 +739,7 @@ library(lubridate)
 library(zoo)
 
 # Load the NSIDC 25 km dataset for the Antarctic Peninsula
-nsidc_harmonized <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/nsidc_12_5km_harmonized_1979-2023.tif")
+nsidc_harmonized <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
 
 
 # Extract dates from raster layers
@@ -899,7 +899,7 @@ plot_continent <- ggplot() +
   )
 
 # Load the Antarctic Peninsula data
-nsidc_harmonized <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/nsidc_12_5km_harmonized_1979-2023.tif")
+nsidc_harmonized <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
 dates <- time(nsidc_harmonized)
 names(nsidc_harmonized) <- dates
 cell_area_sq_meters <- prod(res(nsidc_harmonized))
@@ -1080,11 +1080,50 @@ ggplot(annual_winter_avg_anomaly, aes(x = Year, y = Annual_Winter_Average_Anomal
 ```
 
 
+
+
+
 **Subregion Trends**
+   
+   
+   Processing of Sea Ice Data
+
+    Loading Data:
+        The script loads the sea ice data files (raster stacks) and the study area shapefile.
+        Each raster stack represents sea ice concentration for a specific year.
+
+    Metric Calculation for Each Year:
+        For each year in the range start_year to end_year, the script calculates the specified metrics (persistence, duration, concentration) for each cell in the raster stack.
+
+    Persistence Calculation:
+        Persistence: The number of days per year where sea ice concentration is above a threshold (0.15).
+        This is calculated using a sum function over the raster stack for the year.
+
+    Duration Calculation:
+        Duration: The maximum consecutive days per year where sea ice concentration is above the threshold.
+        This is calculated using a custom function that finds the longest run of days exceeding the threshold.
+
+    Concentration Calculation:
+        Concentration: The average sea ice concentration per year.
+        This is calculated using a mean function over the raster stack for the year.
+
+Applying Linear Models
+
+    Time Series Data:
+        After calculating the yearly metrics for each cell, the script builds a time series for each cell. This time series spans from start_year to end_year.
+
+    Linear Model Fitting:
+        For each cell, the script fits a linear model (lm) to the time series of yearly metric values.
+        The response variable (y) is the metric value for each year.
+        The predictor variable (years) is the sequence of years.
+   
    
    
    
 ```{r}
+
+#Note: This Script Works outside of Markdown. 
+
 # Load necessary libraries
 library(terra)
 library(dplyr)
@@ -1094,7 +1133,7 @@ library(zoo)
 library(patchwork)
 
 # Load the NSIDC 25 km dataset
-nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/nsidc_12_5km_harmonized_1979-2023.tif")
+nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
 
 
 # Load the study area shapefile
@@ -1235,6 +1274,168 @@ if (all(c("Offshore", "Middle Shelf", "Northern Shelf", "Southern Shelf") %in% n
 
 # Display the combined plot
 print(combined_plot)
+
+
+
+```
+
+Continental Extent Anamolies - Top + Bottom Figure
+
+```{r}
+
+#Note: This Script Works outside of Markdown. 
+
+# Load necessary libraries
+library(terra)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(zoo)
+library(patchwork)
+
+# Load the NSIDC 25 km dataset
+nsidc_25km <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif/nsidc_12_5km_harmonized_1979-2023.tif")
+
+
+# Load the study area shapefile
+study_area <- vect("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp")
+
+# Calculate the area for each region and append it
+study_area$Area_km2 <- expanse(study_area, unit = "km")
+
+# Function to generate sea ice extent anomaly plots
+generate_sea_ice_plots <- function(nsicd_raster, study_area, dates) {
+  
+  # Function to calculate sea ice extent statistics
+  calculate_layer_stats <- function(layer, date, cell_area_sq_km) {
+    valid_ice_cells <- global(layer, fun = function(x) sum(x >= 0.15, na.rm = TRUE))
+    total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_km)  # Total ice area in square kilometers
+    return(data.frame(ice_extent_km = total_ice_area_sq_km, date = date))
+  }
+  
+  # Function to process the raster data and calculate statistics
+  process_data <- function(raster, dates) {
+    cell_area_sq_km <- prod(res(raster)) / 1e6  # Convert cell area to square kilometers
+    sea_ice_stats <- lapply(1:nlyr(raster), function(i) {
+      calculate_layer_stats(raster[[i]], dates[i], cell_area_sq_km)
+    })
+    sea_ice_stats_df <- do.call(rbind, sea_ice_stats) %>%
+      mutate(Date = as.Date(date), Year = year(Date), Month = month(Date, label = TRUE, abbr = TRUE)) %>%
+      rename(ice_extent_km = global)  # Updated rename step to match your preferences
+    return(sea_ice_stats_df)
+  }
+  
+  # Function to calculate anomalies based on a baseline period
+  calculate_anomalies <- function(data, baseline_start, baseline_end) {
+    baseline_stats <- data %>%
+      filter(Date >= baseline_start & Date <= baseline_end)
+    baseline_median <- baseline_stats %>%
+      group_by(format(Date, "%m-%d")) %>%
+      summarise(Median_Extent = median(ice_extent_km, na.rm = TRUE)) %>%
+      ungroup()
+    data <- data %>%
+      mutate(MonthDay = format(Date, "%m-%d")) %>%
+      left_join(baseline_median, by = c("MonthDay" = "format(Date, \"%m-%d\")")) %>%
+      mutate(Anomaly = ice_extent_km - Median_Extent) %>%
+      arrange(Date) %>%
+      group_by(Year) %>%
+      mutate(Smoothed_Anomaly = rollmean(Anomaly, 5, fill = NA, align = "center")) %>%
+      ungroup()
+    return(data)
+  }
+  
+  generate_plot <- function(data, title, line_color, subtitle = NULL) {
+    winter_data <- data %>%
+      filter(Month %in% c("Jun", "Jul", "Aug", "Sep")) %>%
+      group_by(Year) %>%
+      summarise(Annual_Winter_Average_Anomaly = mean(Smoothed_Anomaly, na.rm = TRUE))
+    
+    plot <- ggplot(winter_data, aes(x = Year, y = Annual_Winter_Average_Anomaly)) +
+      geom_line(size = 0.8, color = line_color) +
+      geom_point(color = line_color, size = 2, pch = 21, fill = line_color, stroke = 1) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "gray") +
+      labs(
+        title = title,
+        x = "Year",
+        y = "Extent Anomaly (square kilometers)"
+      ) +
+      theme_minimal(base_size = 15) +
+      theme(
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 20, color = "black"),
+        axis.title = element_text(face = "bold", size = 14, color = "black"),
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 12),  # Rotate text
+        axis.text.y = element_text(size = 12, color = "black"),
+        legend.position = "none",
+        panel.grid.major = element_line(color = "#e6e6e6"),
+        panel.grid.minor = element_blank(),
+        axis.line = element_line(color = "black"),
+        axis.ticks = element_line(color = "black"),
+        plot.margin = margin(1, 1, 1, 1, "cm"),
+        axis.title.x = element_text(margin = margin(t = 10, b = 10)),
+        axis.title.y = element_text(margin = margin(r = 10, l = 10))
+      )
+    
+    if (!is.null(subtitle)) {
+      plot <- plot + labs(subtitle = subtitle) +
+        theme(plot.subtitle = element_text(hjust = 0.5, size = 15, color = "black"))
+    }
+    return(plot)
+  }
+  
+  
+  nsidc_thresh <- app(nsicd_raster, fun = function(x) { x[x < .15] <- 0; return(x) })
+  sea_ice_stats_df <- process_data(nsidc_thresh, dates)
+  sea_ice_stats_df <- calculate_anomalies(sea_ice_stats_df, as.Date("1981-01-01"), as.Date("2010-12-31"))
+  plots <- list()
+  
+  # Plot for the entire study area
+  area_size <- round(sum(study_area$Area_km2, na.rm = TRUE))
+  plots$Entire_Study_Area <- generate_plot(sea_ice_stats_df, paste("Antarctic Peninsula Sea Ice Extent Anomalies\nStudy Area: ", area_size, " km²", sep = ""), line_color = "#440154FF", subtitle = "Annual Winter (June to September) Average Anomalies")
+  
+  # Plot for each region
+  regions <- unique(study_area$Region)
+  line_colors <- c("#440154FF", "#21908CFF", "#FDE725FF", "#5DC863FF")
+  for (i in seq_along(regions)) {
+    region <- regions[i]
+    line_color <- line_colors[i]
+    region_shape <- study_area[study_area$Region == region, ]
+    region_raster <- crop(nsicd_raster, region_shape)
+    region_masked <- mask(region_raster, region_shape)
+    region_thresh <- app(region_masked, fun = function(x) { x[x < .15] <- 0; return(x) })
+    region_stats_df <- process_data(region_thresh, dates)
+    region_stats_df <- calculate_anomalies(region_stats_df, as.Date("1981-01-01"), as.Date("2010-12-31"))
+    region_area_size <- round(sum(region_shape$Area_km2, na.rm = TRUE))
+    plots[[region]] <- generate_plot(region_stats_df, paste(region, "\nArea: ", region_area_size, " km²", sep = ""), line_color = line_color)
+  }
+  return(plots)
+}
+
+# Generate and display the plots
+plots <- generate_sea_ice_plots(nsicd_raster = nsidc_25km, study_area = study_area, dates = time(nsidc_25km))
+
+# Check that all regional plots exist before combining
+if (all(c("Offshore", "Middle Shelf", "Northern Shelf", "Southern Shelf") %in% names(plots))) {
+  # Combine the plots using patchwork
+  combined_plot <- plots$Entire_Study_Area /
+    (plots$Offshore | plots$`Middle Shelf` | plots$`Northern Shelf` | plots$`Southern Shelf`) +
+    plot_layout(ncol = 1, heights = c(1, 1)) &
+    plot_annotation(
+      caption = "Data: National Snow & Ice Data Center (NSIDC), 1981-2010 Baseline",
+      theme = theme(
+        plot.caption = element_text(size = 10, color = "black", hjust = 0.5)
+      )
+    )
+  
+  # Display the combined plot
+  print(combined_plot)
+} else {
+  message("One or more regional plots are missing")
+}
+
+
+# Display the combined plot
+print(combined_plot)
+
 
 
 ```
