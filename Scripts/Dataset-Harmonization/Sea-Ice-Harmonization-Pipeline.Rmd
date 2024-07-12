@@ -44,6 +44,8 @@ library(nnet)
 library(foreach)
 library(doParallel)
 library(yardstick)
+library(patchwork)  # For combining plots
+
 
 ```
 
@@ -328,7 +330,6 @@ cat("Best hyperparameters and tuning results saved.\n")
 
 **Train NNET model**
 
-
 ```{r}
 
 
@@ -371,6 +372,7 @@ library(terra)
 library(nnet)
 library(dplyr)
 
+
 # Load the trained ANN model
 cat("Loading the trained ANN model...\n")
 ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/final_ann_model_1500-iterations.rds")
@@ -379,6 +381,7 @@ ann_model <- readRDS("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-ha
 cat("Loading the NSIDC raster stack...\n")
 nsidc_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif")
 original_dates <- time(nsidc_stack)  # Extracting time before any processing
+
 
 # Define the prediction function
 predict_harmonized_values <- function(x) {
@@ -391,29 +394,13 @@ predict_harmonized_values <- function(x) {
 cat("Applying the ANN model to the NSIDC layers...\n")
 harmonized_stack <- app(nsidc_stack, predict_harmonized_values)
 
+time(harmonized_stack) <- original_dates
+
+
 # Set values above 1 to 1
-harmonized_stack <- ifel(harmonized_stack > 1, 1, harmonized_stack)
-harmonized_stack <- ifel(harmonized_stack < 1, 0, harmonized_stack)
+# harmonized_stack <- ifel(harmonized_stack > 1, 1, harmonized_stack)
+# harmonized_stack <- ifel(harmonized_stack < 1, 0, harmonized_stack)
 
-harmonized_stack <- harmonized_stack *100
-
-
-# # Assuming 'nsidc_overlap' and 'harmonized_stack' are already loaded in your R session
-# # Extract the time information from nsidc_overlap
-# nsidc_dates <- time(nsidc_overlap)
-# 
-# # Assign these dates to harmonized_stack
-# terra::time(harmonized_stack) <- nsidc_dates
-# 
-# # Verify the time assignment
-# print(time(harmonized_stack))
-# 
-# # Optionally, save the updated harmonized_stack with the assigned dates
-# writeRaster(harmonized_stack, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/exports/harmonized_stack_with_dates.tif", overwrite = TRUE)
-# 
-# 
-# # Reassign the original dates to the harmonized stack
-# terra::time(harmonized_stack) <- nsidc_overlap
 
 
 # Plot the first layer for verification
@@ -433,6 +420,73 @@ writeRaster(harmonized_stack, filename = file.path(output_dir, "nsidc_12_5km_har
 
 
 ```
+
+
+
+
+## Create Overlapping subsets of data in order to compare all 3
+
+```{r}
+
+
+# Load necessary libraries
+library(terra)
+
+# Define file paths
+amsr_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif"
+nsidc_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif"
+nsidc_harmonized_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/nsidc_12_5km_harmonized_1979-2023.tif"
+
+# Load datasets
+amsr_stack <- rast(amsr_path)
+nsidc_stack <- rast(nsidc_path)
+nsidc_harmonized_stack <- rast(nsidc_harmonized_path)
+
+# Extract the date information from the raster metadata
+amsr_dates <- as.Date(terra::time(amsr_stack), origin = "1970-01-01")
+nsidc_dates <- as.Date(terra::time(nsidc_stack), origin = "1970-01-01")
+nsidc_harmonized_dates <- as.Date(terra::time(nsidc_harmonized_stack), origin = "1970-01-01")
+
+# Find common dates between AMSR and NSIDC Harmonized datasets
+common_dates <- as.Date(intersect(amsr_dates, nsidc_harmonized_dates))
+
+# Find indices for common dates in the NSIDC Harmonized stack
+nsidc_harmonized_indices <- which(nsidc_harmonized_dates %in% common_dates)
+
+# Subset the NSIDC Harmonized stack for the overlapping period
+cat("Subsetting NSIDC Harmonized stack for the overlapping period...\n")
+nsidc_harmonized_overlap <- subset(nsidc_harmonized_stack, nsidc_harmonized_indices)
+
+# Find indices for common dates in the NSIDC stack
+nsidc_indices <- which(nsidc_dates %in% common_dates)
+
+# Subset the NSIDC stack for the overlapping period
+cat("Subsetting NSIDC stack for the overlapping period...\n")
+nsidc_overlap <- subset(nsidc_stack, nsidc_indices)
+
+# Define the target directory for exporting
+output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison"
+
+# Export the subsetted rasters
+cat("Exporting subsetted rasters...\n")
+writeRaster(nsidc_harmonized_overlap, filename = file.path(output_dir, "nsidc_harmonized_common_dates.tif"), overwrite = TRUE)
+writeRaster(nsidc_overlap, filename = file.path(output_dir, "nsidc_common_dates.tif"), overwrite = TRUE)
+writeRaster(nsidc_overlap, filename = file.path(amsr_stack, "amsr_common_dates.tif"), overwrite = TRUE)
+
+# Print the structure of each subsetted dataset
+print("AMSR 12.5 km Dataset Structure:")
+print(list(dimensions = dim(amsr_stack), extent = ext(amsr_stack), crs = crs(amsr_stack), nlyr = nlyr(amsr_stack), resolution = res(amsr_stack)))
+
+print("NSIDC 25 km Overlap Dataset Structure:")
+print(list(dimensions = dim(nsidc_overlap), extent = ext(nsidc_overlap), crs = crs(nsidc_overlap), nlyr = nlyr(nsidc_overlap), resolution = res(nsidc_overlap)))
+
+print("NSIDC Harmonized 12.5 km Overlap Dataset Structure:")
+print(list(dimensions = dim(nsidc_harmonized_overlap), extent = ext(nsidc_harmonized_overlap), crs = crs(nsidc_harmonized_overlap), nlyr = nlyr(nsidc_harmonized_overlap), resolution = res(nsidc_harmonized_overlap)))
+
+
+```
+
+
 
 ## Assess Model Performance by comparing overlapping period
 
@@ -486,14 +540,15 @@ cat("All checks passed: Extents, date ranges, and exact dates are the same.\n")
 
 ```
 
-Visualize the datasets 
+## Visualize the overlapping datasets 
 ```{r}
 
 # Load necessary libraries
 library(terra)
 library(dplyr)
-library(ggplot2)
 library(lubridate)
+library(ggplot2)
+library(patchwork)  # For combining plots
 
 # Define file paths for the raster datasets
 amsr_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif"
@@ -510,27 +565,137 @@ amsr_dates <- as.Date(terra::time(amsr_stack), origin = "1970-01-01")
 nsidc_dates <- as.Date(terra::time(nsidc_stack), origin = "1970-01-01")
 nsidc_harmonized_dates <- as.Date(terra::time(nsidc_harmonized_stack), origin = "1970-01-01")
 
+# Calculate the area of one cell in square kilometers
+cell_area_sq_km <- prod(res(amsr_stack)) / 1e6
 
-# Ensure the extents are the same
-if (!all.equal(ext(amsr_stack), ext(nsidc_stack)) || 
-    !all.equal(ext(amsr_stack), ext(nsidc_harmonized_stack))) {
-  stop("The extents of the raster stacks do not match.")
+# Function to calculate sea ice extent statistics
+calculate_layer_stats <- function(layer, date, cell_area_sq_km) {
+  valid_ice_cells <- global(layer, fun = function(x) sum(x >= 0.15, na.rm = TRUE))
+  total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_km)  # Total ice area in square kilometers
+  return(data.frame(ice_extent_km = total_ice_area_sq_km, date = date))
 }
 
-# Ensure the date ranges are the same
-if (!(all(range(amsr_dates)[1] == range(nsidc_dates)[1], range(amsr_dates)[1] == range(nsidc_harmonized_dates)[1]) &&
-      all(range(amsr_dates)[2] == range(nsidc_dates)[2], range(amsr_dates)[2] == range(nsidc_harmonized_dates)[2]))) {
-  stop("The date ranges of the raster stacks do not match.")
+# Function to process the raster data and calculate statistics
+process_data <- function(raster, dates, cell_area_sq_km) {
+  sea_ice_stats <- lapply(1:nlyr(raster), function(i) {
+    calculate_layer_stats(raster[[i]], dates[i], cell_area_sq_km)
+  })
+  sea_ice_stats_df <- do.call(rbind, sea_ice_stats) %>%
+    mutate(Date = as.Date(date), Year = year(Date), Month = month(Date, label = TRUE, abbr = TRUE))
+  return(sea_ice_stats_df)
 }
 
-# Ensure the included dates are exactly the same
-if (!(all(amsr_dates == nsidc_dates) && all(amsr_dates == nsidc_harmonized_dates))) {
-  stop("The dates included in the raster stacks do not match.")
-}
+# Process each raster stack
+amsr_stats <- process_data(amsr_stack, amsr_dates, cell_area_sq_km)
+nsidc_stats <- process_data(nsidc_stack, nsidc_dates, cell_area_sq_km)
+nsidc_harmonized_stats <- process_data(nsidc_harmonized_stack, nsidc_harmonized_dates, cell_area_sq_km)
 
-cat("All checks passed: Extents, date ranges, and exact dates are the same.\n")
+# Ensure consistent column names for all datasets before merging
+amsr_stats <- process_data(amsr_stack, amsr_dates, cell_area_sq_km) %>%
+  mutate(Source = "AMSR") %>%
+  rename(ice_extent_km = global)  # Assuming 'global' is the sea ice extent column
+
+nsidc_stats <- process_data(nsidc_stack, nsidc_dates, cell_area_sq_km) %>%
+  mutate(Source = "NSIDC") %>%
+  rename(ice_extent_km = global)
+
+nsidc_harmonized_stats <- process_data(nsidc_harmonized_stack, nsidc_harmonized_dates, cell_area_sq_km) %>%
+  mutate(Source = "NSIDC_Harmonized") %>%
+  rename(ice_extent_km = global)
 
 
+# 
+# # Calculate annual statistics
+# stats_summary <- amsr_stats %>% 
+#   full_join(nsidc_stats, by = "Year") %>% 
+#   full_join(nsidc_harmonized_stats, by = "Year") %>% 
+#   group_by(Year) %>%
+#   summarise(mean_extent = mean(global, na.rm = TRUE),
+#             median_extent = median(global, na.rm = TRUE),
+#             max_extent = max(global, na.rm = TRUE),
+#             min_extent = min(global, na.rm = TRUE))
+# 
+# # Calculate annual statistics using the correct data structure
+# stats_summary <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats) %>%
+#   group_by(Year, Source) %>%
+#   summarise(
+#     mean_extent = mean(global, na.rm = TRUE),
+#     median_extent = median(global, na.rm = TRUE),
+#     max_extent = max(global, na.rm = TRUE),
+#     min_extent = min(global, na.rm = TRUE),
+#     .groups = "drop"  # Drop grouping for further manipulations
+#   )
+
+# Calculate annual statistics using the correct data structure
+stats_summary <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats) %>%
+  group_by(Year, Source) %>%
+  summarise(
+    mean_extent = mean(ice_extent_km, na.rm = TRUE),
+    median_extent = median(ice_extent_km, na.rm = TRUE),
+    max_extent = max(ice_extent_km, na.rm = TRUE),
+    min_extent = min(ice_extent_km, na.rm = TRUE),
+    .groups = "drop"  # Drop grouping for further manipulations
+  )
+
+# Define color-blind friendly colors
+line_colors <- c("AMSR" = "#377eb8", "NSIDC" = "#ff7f00", "NSIDC Harmonized" = "#4daf4a")
+
+
+# Plotting each statistic with all sources on each plot
+p_mean <- ggplot(stats_summary, aes(x = Year, y = mean_extent, color = Source)) +
+  geom_line(size = 0.75) +
+  scale_color_manual(values = line_colors) +
+  labs(title = "Mean Annual Sea Ice Extent", y = "Mean Extent (sq km)")
+
+p_median <- ggplot(stats_summary, aes(x = Year, y = median_extent, color = Source)) +
+  geom_line(size = 0.75) +
+  scale_color_manual(values = line_colors) +
+  labs(title = "Median Annual Sea Ice Extent", y = "Median Extent (sq km)")
+
+p_max <- ggplot(stats_summary, aes(x = Year, y = max_extent, color = Source)) +
+  geom_line(size = 0.75) +
+  scale_color_manual(values = line_colors) +
+  labs(title = "Maximum Annual Sea Ice Extent", y = "Max Extent (sq km)")
+
+p_min <- ggplot(stats_summary, aes(x = Year, y = min_extent, color = Source)) +
+  geom_line(size = 0.75) +
+  scale_color_manual(values = line_colors) +
+  labs(title = "Minimum Annual Sea Ice Extent", y = "Min Extent (sq km)")
+
+# Combine the plots into a grid
+combined_plot <- (p_mean | p_median) / (p_max | p_min) + 
+  plot_layout(guides = 'collect') +
+  theme(legend.position = "right")
+
+# Print the combined plot
+print(combined_plot)
+
+```
+
+
+```{r}
+
+# Load necessary libraries
+library(terra)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(patchwork)  # For combining plots
+
+# Define file paths for the raster datasets
+amsr_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif"
+nsidc_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_common_dates.tif"
+nsidc_harmonized_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_harmonized_common_dates.tif"
+
+# Load the raster datasets
+amsr_stack <- rast(amsr_path)
+nsidc_stack <- rast(nsidc_path)
+nsidc_harmonized_stack <- rast(nsidc_harmonized_path)
+
+# Extract the date information from the raster metadata
+amsr_dates <- as.Date(terra::time(amsr_stack), origin = "1970-01-01")
+nsidc_dates <- as.Date(terra::time(nsidc_stack), origin = "1970-01-01")
+nsidc_harmonized_dates <- as.Date(terra::time(nsidc_harmonized_stack), origin = "1970-01-01")
 
 # Calculate the area of one cell in square kilometers
 cell_area_sq_km <- prod(res(amsr_stack)) / 1e6
@@ -555,60 +720,51 @@ process_data <- function(raster, dates, cell_area_sq_km) {
 # Process each raster stack
 amsr_stats <- process_data(amsr_stack, amsr_dates, cell_area_sq_km) %>%
   mutate(Source = "AMSR")
+
 nsidc_stats <- process_data(nsidc_stack, nsidc_dates, cell_area_sq_km) %>%
   mutate(Source = "NSIDC")
+
 nsidc_harmonized_stats <- process_data(nsidc_harmonized_stack, nsidc_harmonized_dates, cell_area_sq_km) %>%
   mutate(Source = "NSIDC_Harmonized")
 
+# Calculate differences between harmonized dataset and the other datasets
+differences <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats) %>%
+  spread(Source, ice_extent_km) %>%
+  mutate(
+    Diff_AMSR = NSIDC_Harmonized - AMSR,
+    Diff_NSIDC = NSIDC_Harmonized - NSIDC
+  )
 
-# Filter for winter months (June, July, August, September)
-winter_months <- c("Jun", "Jul", "Aug", "Sep")
+# Summarize differences
+summary_diff <- differences %>%
+  summarise(
+    Mean_Diff_AMSR = mean(Diff_AMSR, na.rm = TRUE),
+    SD_Diff_AMSR = sd(Diff_AMSR, na.rm = TRUE),
+    Mean_Diff_NSIDC = mean(Diff_NSIDC, na.rm = TRUE),
+    SD_Diff_NSIDC = sd(Diff_NSIDC, na.rm = TRUE)
+  )
 
-amsr_winter_stats <- amsr_stats %>% filter(Month %in% winter_months)
-nsidc_winter_stats <- nsidc_stats %>% filter(Month %in% winter_months)
-nsidc_harmonized_winter_stats <- nsidc_harmonized_stats %>% filter(Month %in% winter_months)
+print(summary_diff)
 
+# Plot differences
+p_diff_amsr <- ggplot(differences, aes(x = Year, y = Diff_AMSR)) +
+  geom_line(color = "#377eb8") +
+  labs(title = "Difference in Sea Ice Extent: NSIDC Harmonized vs AMSR", y = "Difference (sq km)", x = "Year")
 
+p_diff_nsidc <- ggplot(differences, aes(x = Year, y = Diff_NSIDC)) +
+  geom_line(color = "#ff7f00") +
+  labs(title = "Difference in Sea Ice Extent: NSIDC Harmonized vs NSIDC", y = "Difference (sq km)", x = "Year")
 
-# Calculate average winter sea ice extent per year for each dataset
-amsr_avg_winter_extent <- amsr_winter_stats %>% group_by(Year) %>% summarize(avg_extent = mean(global, na.rm = TRUE))
-nsidc_avg_winter_extent <- nsidc_winter_stats %>% group_by(Year) %>% summarize(avg_extent = mean(global, na.rm = TRUE))
-nsidc_harmonized_avg_winter_extent <- nsidc_harmonized_winter_stats %>% group_by(Year) %>% summarize(avg_extent = mean(global, na.rm = TRUE))
+# Combine the plots into a grid
+combined_diff_plot <- p_diff_amsr / p_diff_nsidc + plot_layout(guides = 'collect') + theme(legend.position = "right")
 
-
-
-# # Combine all results into a single data frame
-# sea_ice_extent_df <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats)
-# 
-# # Print the data frame
-# print(sea_ice_extent_df)
-
-
-# Merge the datasets for plotting
-avg_winter_extent <- full_join(amsr_avg_winter_extent, nsidc_avg_winter_extent, by = "Year", suffix = c("_amsr", "_nsidc"))
-avg_winter_extent <- full_join(avg_winter_extent, nsidc_harmonized_avg_winter_extent, by = "Year")
-avg_winter_extent <- avg_winter_extent %>% rename(avg_extent_harmonized = avg_extent)
-
-# Plotting
-ggplot(data = avg_winter_extent, aes(x = Year)) +
-  geom_line(aes(y = amsr_avg_winter_extent, color = "AMSR 12.5 km"), size = 1.2) +
-  geom_line(aes(y = nsidc_avg_winter_extent, color = "NSIDC 25 km"), size = 1.2) +
-  geom_line(aes(y = nsidc_harmonized_avg_winter_extent, color = "NSIDC Harmonized 12.5 km"), size = 1.2) +
-  labs(title = "Average Winter Sea Ice Extent (June-September)",
-       x = "Year",
-       y = "Average Sea Ice Extent (sq km)",
-       color = "Dataset") +
-  theme_minimal()
-
-# Optionally, you can save this plot using ggsave()
-# ggsave("path_to_save_plot/sea_ice_extent_comparison.pdf")
-
-
-
-
+# Print the combined plot
+print(combined_diff_plot)
 
 
 ```
+
+
 
 **ANN Model Assessment**
 
