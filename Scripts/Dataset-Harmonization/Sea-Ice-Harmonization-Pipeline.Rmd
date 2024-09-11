@@ -491,8 +491,6 @@ print(list(dimensions = dim(nsidc_harmonized_overlap), extent = ext(nsidc_harmon
 ## Assess Model Performance by comparing overlapping period
 
 
-
-
 **Ensure all datasets are comparable**
 
 ```{r}
@@ -539,6 +537,36 @@ cat("All checks passed: Extents, date ranges, and exact dates are the same.\n")
 
 
 ```
+
+
+
+
+1. First Script: Visualizing Overlapping Datasets and Calculating Annual Statistics
+Objective:
+
+    The primary goal of this script is to visualize the overlapping sea ice datasets (AMSR, NSIDC, NSIDC Harmonized) and compute summary statistics (mean, median, maximum, and minimum) for sea ice extent over the years.
+
+Key Features:
+
+    Data Processing:
+        Loads three raster datasets: AMSR, NSIDC, and NSIDC Harmonized.
+        Extracts date information from the raster metadata.
+        Processes each dataset by calculating sea ice extent for every layer (time step) based on the condition that sea ice concentration >= 0.15.
+        Computes the total sea ice area in square kilometers by multiplying valid ice cells by the cell area.
+    Annual Statistics:
+        For each year, computes four key statistics for each dataset: mean, median, max, and min sea ice extent.
+        Groups the data by year and dataset source (AMSR, NSIDC, NSIDC Harmonized).
+    Visualization:
+        Generates four plots (mean, median, max, min sea ice extent), each showing the sea ice extent over the years for the three datasets.
+        Uses color-coded lines for each dataset (AMSR in blue, NSIDC in orange, NSIDC Harmonized in green).
+        Combines the four plots into a single grid using patchwork.
+
+Output:
+
+    A 2x2 grid showing the mean, median, max, and min annual sea ice extent for AMSR, NSIDC, and NSIDC Harmonized datasets.
+    
+    
+
 
 ## Visualize the overlapping datasets 
 ```{r}
@@ -673,6 +701,33 @@ print(combined_plot)
 ```
 
 
+2. Calculating and Plotting Annual Differences Between Datasets
+Objective:
+
+    This script focuses on calculating the differences in sea ice extent between the NSIDC Harmonized dataset and the other two datasets (AMSR and NSIDC) over the years.
+
+Key Features:
+
+    Data Processing:
+        Similar to the first script, it loads and processes three raster datasets (AMSR, NSIDC, NSIDC Harmonized) and calculates sea ice extent for each time step.
+
+    Calculating Differences:
+        After processing each dataset, the script calculates the difference between the sea ice extent values of the NSIDC Harmonized dataset and the AMSR and NSIDC datasets:
+            Diff_AMSR = NSIDC_Harmonized - AMSR
+            Diff_NSIDC = NSIDC_Harmonized - NSIDC
+
+    Summary of Differences:
+        Computes the mean and standard deviation of the differences for both AMSR and NSIDC comparisons, summarizing how well the harmonized dataset aligns with the original datasets.
+
+    Visualization:
+        Plots the difference in sea ice extent between NSIDC Harmonized vs. AMSR and NSIDC Harmonized vs. NSIDC over the years.
+        Uses line plots to visualize the difference for each comparison, color-coded for clarity.
+        Combines the two plots into a vertical grid using patchwork.
+
+Output:
+
+    A vertical 2-plot grid showing the annual differences in sea ice extent between NSIDC Harmonized vs. AMSR and NSIDC Harmonized vs. NSIDC, highlighting the variability in the differences.
+
 ```{r}
 
 # Load necessary libraries
@@ -765,6 +820,145 @@ print(combined_diff_plot)
 ```
 
 
+
+This script focuses on visualizing pixel-level differences between the AMSR, NSIDC (original), and NSIDC Harmonized datasets, using a black mask as a background for areas outside of the region of interest. Here’s a breakdown of what makes this script different from the others:
+
+Key Features:
+
+    Pixel-Level Differences:
+        This script calculates pixel-level differences between two datasets (AMSR vs. NSIDC and AMSR vs. NSIDC Harmonized). This is done using the function calculate_pixel_diff_raster(), which computes the difference between corresponding layers of two datasets while retaining the direction of the difference.
+        AMSR vs. NSIDC: The difference shows how much the sea ice concentration estimates differ between the AMSR and NSIDC datasets.
+        AMSR vs. NSIDC Harmonized: The difference shows how well the harmonized dataset compares with AMSR at the pixel level.
+
+    Black Mask for Background:
+        A black mask is applied as the background for regions outside of the area of interest (i.e., masked regions). This is done by loading a raster mask (which has pre-defined masked areas) and plotting it first in black behind the sea ice data.
+        The masked areas, represented in black, provide a visual distinction between regions with valid data and those without.
+
+    Custom Diverging Color Scale:
+        The script uses a diverging color scale (blue to white to orange) to represent pixel-level differences:
+            Blue: Negative differences (AMSR estimates greater than the NSIDC/NSIDC Harmonized).
+            White: Zero difference (perfect alignment between datasets).
+            Orange: Positive differences (NSIDC/NSIDC Harmonized estimates are greater than AMSR).
+        This color scale helps visually identify where and how much the datasets differ, both positively and negatively.
+
+    Date-Based Comparison:
+        The script selects three specific dates from the dataset (date1, date2, and date3) for comparison. The pixel-level differences are calculated and visualized for each of these dates.
+        The user can adjust these dates to focus on different time periods within the datasets.
+
+    Visualization:
+        The script creates individual plots for the AMSR vs. NSIDC and AMSR vs. Harmonized comparisons for each selected date.
+        These plots are then combined into a grid using patchwork, which displays all six plots (three dates × two comparisons) side by side for easy visual comparison.
+
+
+**Visualize Pixel Level Difference**
+```{r}
+# Load necessary libraries
+library(terra)
+library(ggplot2)
+library(patchwork)
+
+# Load the raster black mask (we will color all masked areas black)
+black_mask_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/Land_Mask/Black_Mask.tif"
+black_mask <- rast(black_mask_path)
+
+# Function to calculate the pixel-level difference (retain direction)
+calculate_pixel_diff_raster <- function(layer1, layer2) {
+  diff <- layer1 - layer2  # Calculate the difference (retain direction)
+  return(diff)  # Return the difference as a SpatRaster object
+}
+
+# Select dates for the layers to be compared (adjust according to your needs)
+date1 <- as.Date(amsr_dates[1])
+date2 <- as.Date(amsr_dates[2])
+date3 <- as.Date(amsr_dates[3])
+
+# Calculate pixel-level differences for AMSR vs. NSIDC (original)
+pixel_diff_amsr_nsidc_1 <- calculate_pixel_diff_raster(amsr_stack[[1]], nsidc_stack[[1]])
+pixel_diff_amsr_nsidc_2 <- calculate_pixel_diff_raster(amsr_stack[[2]], nsidc_stack[[2]])
+pixel_diff_amsr_nsidc_3 <- calculate_pixel_diff_raster(amsr_stack[[3]], nsidc_stack[[3]])
+
+# Calculate pixel-level differences for AMSR vs. Harmonized
+pixel_diff_amsr_harmonized_1 <- calculate_pixel_diff_raster(amsr_stack[[1]], nsidc_harmonized_stack[[1]])
+pixel_diff_amsr_harmonized_2 <- calculate_pixel_diff_raster(amsr_stack[[2]], nsidc_harmonized_stack[[2]])
+pixel_diff_amsr_harmonized_3 <- calculate_pixel_diff_raster(amsr_stack[[3]], nsidc_harmonized_stack[[3]])
+
+# Convert the raster data to data frames for plotting
+df_amsr_nsidc_1 <- as.data.frame(pixel_diff_amsr_nsidc_1, xy = TRUE)
+df_amsr_nsidc_2 <- as.data.frame(pixel_diff_amsr_nsidc_2, xy = TRUE)
+df_amsr_nsidc_3 <- as.data.frame(pixel_diff_amsr_nsidc_3, xy = TRUE)
+
+df_amsr_harmonized_1 <- as.data.frame(pixel_diff_amsr_harmonized_1, xy = TRUE)
+df_amsr_harmonized_2 <- as.data.frame(pixel_diff_amsr_harmonized_2, xy = TRUE)
+df_amsr_harmonized_3 <- as.data.frame(pixel_diff_amsr_harmonized_3, xy = TRUE)
+
+# Convert black mask to a data frame
+df_black_mask <- as.data.frame(black_mask, xy = TRUE)
+
+# Define custom diverging color scale
+custom_colors <- scale_fill_gradient2(
+  low = "steelblue",    # Negative differences (blue)
+  mid = "white",        # Zero difference (white)
+  high = "orange",      # Positive differences (orange)
+  na.value = "black",   # NA values as black for background mask
+  limits = c(-0.5, 0.5),  # Adjust the range as needed
+  name = "Difference"
+)
+
+# Plot AMSR vs. NSIDC (original) pixel differences with black mask as background
+plot_amsr_nsidc_1 <- ggplot() +
+  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
+  geom_raster(data = df_amsr_nsidc_1, aes(x = x, y = y, fill = df_amsr_nsidc_1[, 3])) +
+  custom_colors +
+  labs(title = paste("AMSR vs NSIDC (Original) - Date:", date1)) +
+  theme_minimal()
+
+plot_amsr_nsidc_2 <- ggplot() +
+  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
+  geom_raster(data = df_amsr_nsidc_2, aes(x = x, y = y, fill = df_amsr_nsidc_2[, 3])) +
+  custom_colors +
+  labs(title = paste("AMSR vs NSIDC (Original) - Date:", date2)) +
+  theme_minimal()
+
+plot_amsr_nsidc_3 <- ggplot() +
+  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
+  geom_raster(data = df_amsr_nsidc_3, aes(x = x, y = y, fill = df_amsr_nsidc_3[, 3])) +
+  custom_colors +
+  labs(title = paste("AMSR vs NSIDC (Original) - Date:", date3)) +
+  theme_minimal()
+
+# Plot AMSR vs. Harmonized pixel differences with black mask as background
+plot_amsr_harmonized_1 <- ggplot() +
+  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
+  geom_raster(data = df_amsr_harmonized_1, aes(x = x, y = y, fill = df_amsr_harmonized_1[, 3])) +
+  custom_colors +
+  labs(title = paste("AMSR vs Harmonized - Date:", date1)) +
+  theme_minimal()
+
+plot_amsr_harmonized_2 <- ggplot() +
+  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
+  geom_raster(data = df_amsr_harmonized_2, aes(x = x, y = y, fill = df_amsr_harmonized_2[, 3])) +
+  custom_colors +
+  labs(title = paste("AMSR vs Harmonized - Date:", date2)) +
+  theme_minimal()
+
+plot_amsr_harmonized_3 <- ggplot() +
+  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
+  geom_raster(data = df_amsr_harmonized_3, aes(x = x, y = y, fill = df_amsr_harmonized_3[, 3])) +
+  custom_colors +
+  labs(title = paste("AMSR vs Harmonized - Date:", date3)) +
+  theme_minimal()
+
+# Combine the plots side by side for AMSR vs NSIDC and AMSR vs Harmonized comparisons
+combined_plot <- (plot_amsr_nsidc_1 + plot_amsr_harmonized_1) / 
+  (plot_amsr_nsidc_2 + plot_amsr_harmonized_2) / 
+  (plot_amsr_nsidc_3 + plot_amsr_harmonized_3) +
+  plot_layout(guides = 'collect')
+
+# Print the combined plot
+print(combined_plot)
+
+
+```
 
 **ANN Model Assessment**
 
@@ -951,13 +1145,354 @@ plot(amsr_overlap[[1]], colNA = "red", main = "AMSR Unified 12.5 km")
 ```
 
 
+**ANN Model assesment (sans harmonization training)**
+```{r}
+# Load the necessary libraries
+library(terra)
+library(dplyr)
+library(yardstick)
+library(ggplot2)
+library(hexbin)
+library(viridis)
+
+# Load the harmonized NSIDC dataset
+cat("Loading the harmonized NSIDC dataset...\n")
+harmonized_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_harmonized_common_dates.tif")
+
+# Load the AMSR dataset
+cat("Loading the AMSR dataset...\n")
+amsr_overlap <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif")
+
+# Ensure that the time information is consistent
+time(harmonized_stack) <- time(amsr_overlap)
+
+# Recast any values above 1 to 1
+harmonized_stack <- clamp(harmonized_stack, lower = 0, upper = 1, values = TRUE)
+
+# Compute statistical metrics
+compute_metrics <- function(actual, predicted) {
+  actual_values <- values(actual)
+  predicted_values <- values(predicted)
+  # Remove NA values for accurate comparison
+  valid_indices <- !is.na(actual_values) & !is.na(predicted_values)
+  actual_values <- actual_values[valid_indices]
+  predicted_values <- predicted_values[valid_indices]
+  
+  rmse <- yardstick::rmse_vec(actual_values, predicted_values)
+  r2 <- cor(actual_values, predicted_values)^2
+  mase <- yardstick::mase_vec(actual_values, predicted_values)
+  ccc <- yardstick::ccc_vec(actual_values, predicted_values)
+  huber_loss <- yardstick::huber_loss_vec(actual_values, predicted_values)
+  rpiq <- yardstick::rpiq_vec(actual_values, predicted_values)
+  rpd <- yardstick::rpd_vec(actual_values, predicted_values)
+  smape <- yardstick::smape_vec(actual_values, predicted_values)
+  
+  return(list(RMSE = rmse, R2 = r2, MASE = mase, CCC = ccc, 
+              Huber_Loss = huber_loss, RPIQ = rpiq, RPD = rpd, SMAPE = smape))
+}
+
+# Apply metrics to each layer
+metrics_list <- lapply(1:nlyr(amsr_overlap), function(i) {
+  actual <- amsr_overlap[[i]]
+  predicted <- harmonized_stack[[i]]
+  compute_metrics(actual, predicted)
+})
+
+# Print out metrics for each layer
+for (i in 1:length(metrics_list)) {
+  cat("Layer", i, ":\n")
+  print(metrics_list[[i]])
+}
+
+# Extract individual metric values and calculate the averages
+rmse_values <- sapply(metrics_list, function(x) x$RMSE)
+r2_values <- sapply(metrics_list, function(x) x$R2)
+mase_values <- sapply(metrics_list, function(x) x$MASE)
+ccc_values <- sapply(metrics_list, function(x) x$CCC)
+huber_loss_values <- sapply(metrics_list, function(x) x$Huber_Loss)
+rpiq_values <- sapply(metrics_list, function(x) x$RPIQ)
+rpd_values <- sapply(metrics_list, function(x) x$RPD)
+smape_values <- sapply(metrics_list, function(x) x$SMAPE)
+
+average_rmse <- mean(rmse_values, na.rm = TRUE)
+average_r2 <- mean(r2_values, na.rm = TRUE)
+average_mase <- mean(mase_values, na.rm = TRUE)
+average_ccc <- mean(ccc_values, na.rm = TRUE)
+average_huber_loss <- mean(huber_loss_values, na.rm = TRUE)
+average_rpiq <- mean(rpiq_values, na.rm = TRUE)
+average_rpd <- mean(rpd_values, na.rm = TRUE)
+average_smape <- mean(smape_values, na.rm = TRUE)
+
+# Print out average metrics
+cat("Average RMSE:", average_rmse, "\n")
+cat("Average R2:", average_r2, "\n")
+cat("Average MASE:", average_mase, "\n")
+cat("Average CCC:", average_ccc, "\n")
+cat("Average Huber Loss:", average_huber_loss, "\n")
+cat("Average RPIQ:", average_rpiq, "\n")
+cat("Average RPD:", average_rpd, "\n")
+cat("Average SMAPE:", average_smape, "\n")
+
+# Calculate and print ranges and quartiles for each metric
+cat("Calculating and printing ranges and quartiles for each metric...\n")
+
+metrics_summary <- function(metric_values) {
+  list(
+    Min = min(metric_values, na.rm = TRUE),
+    Q1 = quantile(metric_values, 0.25, na.rm = TRUE),
+    Median = median(metric_values, na.rm = TRUE),
+    Q3 = quantile(metric_values, 0.75, na.rm = TRUE),
+    Max = max(metric_values, na.rm = TRUE)
+  )
+}
+
+metric_names <- c("RMSE", "R2", "MASE", "CCC", "Huber Loss", "RPIQ", "RPD", "SMAPE")
+metrics <- list(rmse_values, r2_values, mase_values, ccc_values, huber_loss_values, rpiq_values, rpd_values, smape_values)
+
+for (i in 1:length(metrics)) {
+  cat(metric_names[i], ":\n")
+  print(metrics_summary(metrics[[i]]))
+  cat("\n")
+}
+
+# Prepare the data for plotting
+data <- data.frame(
+  AMSR = as.vector(values(amsr_overlap)),
+  NSIDC = as.vector(values(harmonized_stack))
+)
+data <- na.omit(data)  # Remove rows with NA values
+
+# Generate the hexbin object for the entire dataset
+hb <- hexbin(data$AMSR, data$NSIDC, xbins = 35)
+
+# Create the hexbin plot with log10 transformation for the entire dataset (0-1)
+plot(hb, 
+     main = "Hexbin Plot of AMSR Unified vs. NSIDC Harmonized (0-1 Range)",
+     xlab = "AMSR Unified 12.5 km (Actual, 0-1)",
+     ylab = "NSIDC 12.5 km Harmonized (Predicted, 0-1)",
+     colramp = function(n) viridis::viridis(n),
+     colorcut = seq(0, 1, length.out = 10), 
+     mincnt = 1,   # Minimum count threshold
+     trans = log10,  # Log10 transformation for counts
+     inv = function(x) 10^x)  # Inverse transformation
+
+# Generate the hexbin object for the entire dataset
+hb <- hexbin(data$AMSR, data$NSIDC, xbins = 45)
+
+# Create the hexbin plot with log10 transformation for the entire dataset (0-1)
+plot(hb, 
+     main = "Hexbin Plot of AMSR Unified vs. NSIDC Harmonized (0-1 Range)",
+     xlab = "AMSR Unified 12.5 km (Actual, 0-1)",
+     ylab = "NSIDC 12.5 km Harmonized (Predicted, 0-1)",
+     colramp = function(n) viridis::viridis(n),
+     colorcut = seq(0, 1, length.out = 7), 
+     mincnt = 1,   # Minimum count threshold
+     trans = log10,  # Log10 transformation for counts
+     inv = function(x) 10^x)  # Inverse transformation
 
 
 
 
 
 
+# Load necessary libraries
+library(ggplot2)
+library(RColorBrewer)
+library(dplyr)
+
+# Create binned categories for AMSR and NSIDC
+data$AMSR_bin <- cut(data$AMSR, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE)
+data$NSIDC_bin <- cut(data$NSIDC, breaks = seq(0, 1, by = 0.1), include.lowest = TRUE)
+
+# Function to calculate SMAPE
+calc_smape <- function(actual, predicted) {
+  return(100 * mean(abs(actual - predicted) / ((abs(actual) + abs(predicted)) / 2)))
+}
+
+# Aggregate data to calculate mean SMAPE for each bin combination
+error_data <- data %>%
+  group_by(AMSR_bin, NSIDC_bin) %>%
+  summarize(
+    Mean_SMAPE = calc_smape(AMSR, NSIDC),  # Mean SMAPE for each bin
+    Count = n()                            # Number of points in the bin
+  ) %>%
+  na.omit()
+
+# Calculate the relative contribution of each bin to the total SMAPE
+total_smape_sum <- sum(error_data$Mean_SMAPE * error_data$Count)
+error_data <- error_data %>%
+  mutate(Relative_Error_Contribution = (Mean_SMAPE * Count / total_smape_sum) * 100)
+
+# Plot the heatmap of relative error contribution using Brewer Blues
+ggplot(error_data, aes(x = AMSR_bin, y = NSIDC_bin, fill = Relative_Error_Contribution)) +
+  geom_tile() +
+  scale_fill_distiller(palette = "Blues", name = "Relative Error (%)") +
+  labs(
+    title = "Relative Error Contribution by Binned AMSR and NSIDC Values",
+    x = "Binned AMSR (0-1)",
+    y = "Binned NSIDC (0-1)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
 
 
 
+
+```
+
+
+
+
+
+```{r}
+# Load necessary libraries
+library(ggplot2)
+
+# Plot histogram for AMSR dataset
+ggplot(data, aes(x = AMSR)) +
+  geom_histogram(binwidth = 0.05, fill = "steelblue", color = "black", alpha = 0.7) +
+  labs(
+    title = "Histogram of AMSR Data",
+    x = "AMSR Values (0-1)",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+# Plot histogram for NSIDC dataset
+ggplot(data, aes(x = NSIDC)) +
+  geom_histogram(binwidth = 0.05, fill = "darkorange", color = "black", alpha = 0.7) +
+  labs(
+    title = "Histogram of NSIDC Data",
+    x = "NSIDC Values (0-1)",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+
+
+
+# Sort the heatmap data by SMAPE in descending order
+top_errors <- heatmap_data %>%
+  arrange(desc(SMAPE)) %>%
+  head(10)  # Modify '10' to the number of top bins you want to examine
+
+# View the top bins contributing the most error
+print(top_errors)
+
+# Calculate total or average SMAPE for specific binned ranges if needed:
+# For example, summarizing error for AMSR values between 0.0 and 0.2
+summary_error <- heatmap_data %>%
+  filter(AMSR_bin %in% c("(0,0.05]", "(0.05,0.1]", "(0.1,0.15]", "(0.15,0.2]")) %>%
+  summarize(Total_Error = sum(SMAPE), Avg_Error = mean(SMAPE))
+
+print(summary_error)
+
+```
+
+
+
+```{r}
+# Set the custom color palette
+pal <- c("#bb3e03","#ee9b00","#e9d8a6","#94d2bd","#0a9396","#005f73")
+bck <- "#001219"
+
+# Set the background color
+par(bg = bck)
+
+# Generate the hexbin object for the entire dataset
+hb <- hexbin(data$AMSR, data$NSIDC, xbins = 30)
+
+# Determine appropriate breaks based on your data
+custom_breaks <- c(0, 100, 1000, 10000, 50000, 100000, 500000, 1e6, 5e6, max(hb@count))
+
+# Normalize custom breaks to be in the range [0, 1]
+colorcut_breaks <- custom_breaks / max(hb@count)
+
+# Ensure the breaks start at 0 and end at 1
+colorcut_breaks <- c(0, colorcut_breaks[colorcut_breaks > 0 & colorcut_breaks < 1], 1)
+
+# Create the hexbin plot with the custom color palette
+plot(hb, 
+     main = "Hexbin Plot of AMSR Unified vs. NSIDC Harmonized (0-1 Range)",
+     xlab = "AMSR Unified 12.5 km (Actual, 0-1)",
+     ylab = "NSIDC 12.5 km Harmonized (Predicted, 0-1)",
+     colramp = function(n) colorRampPalette(pal)(n),  # Use the custom color palette
+     colorcut = colorcut_breaks,  # Use the corrected breaks
+     mincnt = 1)  # Minimum count threshold
+
+
+
+
+
+# Load the necessary libraries
+library(terra)
+
+# Load the harmonized NSIDC dataset
+harmonized_stack <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_harmonized_common_dates.tif")
+
+# Load the AMSR dataset
+amsr_overlap <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif")
+
+# Calculate the number of pixels in each dataset
+n_pixels_harmonized <- ncell(harmonized_stack)
+n_pixels_amsr <- ncell(amsr_overlap)
+
+# Print the number of pixels
+cat("Number of pixels in the harmonized NSIDC dataset:", n_pixels_harmonized, "\n")
+cat("Number of pixels in the AMSR dataset:", n_pixels_amsr, "\n")
+
+
+
+
+
+# Generate the hexbin object for the entire dataset
+hb <- hexbin(data$AMSR, data$NSIDC, xbins = 10)
+
+# Calculate quantile-based breaks
+quantile_breaks <- quantile(hb@count, probs = seq(0, 1, length.out = 7), na.rm = TRUE)
+
+# Ensure colorcut includes 0 and 1
+colorcut_breaks <- c(0, quantile_breaks[-1] / max(hb@count))
+
+# Create the hexbin plot using quantile-based legend breaks
+plot(hb, 
+     main = "Hexbin Plot of AMSR Unified vs. NSIDC Harmonized (0-1 Range)",
+     xlab = "AMSR Unified 12.5 km (Actual, 0-1)",
+     ylab = "NSIDC 12.5 km Harmonized (Predicted, 0-1)",
+     colramp = function(n) pal,
+     colorcut = colorcut_breaks,  # Use quantile-based breaks including 0
+     mincnt = 1   # Minimum count threshold
+)
+
+
+
+
+
+# Generate the hexbin object for the entire dataset
+hb <- hexbin(data$AMSR, data$NSIDC, xbins = 50)
+
+# Calculate total number of pairs
+total_pairs <- sum(hb@count)
+
+# Convert counts to percentages
+hb@count <- (hb@count / total_pairs) * 100
+
+# Manually set breaks for percentage-based legend
+manual_breaks <- c(0, 1, 5, 10, 25, 50, 100)  # Adjust these values as needed
+
+# Normalize the breaks to range from 0 to 1 for colorcut
+colorcut <- manual_breaks / max(manual_breaks)
+
+# Create the hexbin plot using the percentage-based counts
+plot(hb, 
+     main = "Hexbin Plot of AMSR Unified vs. NSIDC Harmonized (0-1 Range)",
+     xlab = "AMSR Unified 12.5 km (Actual, 0-1)",
+     ylab = "NSIDC 12.5 km Harmonized (Predicted, 0-1)",
+     colramp = function(n) pal,  # Using your custom color palette
+     colorcut = colorcut,  # Use manual breaks for better distribution
+     mincnt = 1   # Minimum count threshold
+)
+
+
+```
 
