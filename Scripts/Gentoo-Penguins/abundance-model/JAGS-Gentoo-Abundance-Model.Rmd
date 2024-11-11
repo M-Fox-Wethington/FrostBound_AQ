@@ -17,6 +17,478 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 
+**Generate Presence Absence Assumptions**
+```{r}
+library(tidyverse)
+
+
+required_packages <- c("rlang", "fastmap", "digest", "fs", "cachem", "vctrs", "stringi", "glue", "cli", "utf8", "fansi", "dplyr")
+
+for(pkg in required_packages){
+  if(!require(pkg, character.only = TRUE)){
+    install.packages(pkg)
+  }
+}
+
+min_season <- 1970
+max_season <- 2023
+species <- "GEPE"
+
+# assign the total number of seasons as n_seasons
+(n_seasons <- (max_season - min_season) + 1)
+
+
+SiteList <- mapppdr::penguin_obs %>%
+  # keep all sites that have at least 1 count between min and max season
+  dplyr::filter(count > 0 & species_id == species & season >= min_season & season <= max_season) %>%
+  # create relative season index 
+  mutate(season_relative = season - min_season + 1) %>%
+  # determine first season a count is observed for each site
+  group_by(site_id) %>%
+  summarise(initial_season = min(season_relative)) %>%
+  ungroup() %>%
+  # join to get other site specific covariates for visualization purposes
+  left_join(mapppdr::sites, by = "site_id") %>%
+  # create site index for model and visualization
+  mutate(site = as.numeric(as.factor(site_id))) %>%
+  dplyr::select(site_id, site_name, ccamlr_id, site, initial_season, latitude, longitude)
+
+(n_sites <- nrow(SiteList))
+
+# create site x season template which is used throughout analysis
+w_template <- SiteList %>%
+  dplyr::select(site_id, site) %>%
+  # expand each site by the number of seasons
+  uncount(n_seasons) %>%
+  # create relative season index for each site
+  mutate(season_relative = rep(1:n_seasons, n_sites)) %>%
+  # create season var from relative season index
+  mutate(season = season_relative + min_season - 1) %>%
+  arrange(season_relative, site)
+
+w_df <- rbind(
+  # keep all presence/absence data and assign observation type as 2 (observed)
+  mapppdr::penguin_obs %>%
+    dplyr::filter(species_id == species & season >= min_season & season <= max_season) %>%
+    dplyr::select(site_id, season, presence) %>%
+    mutate(known_w = 1),
+  # append presence/absence assumption data which is not part of mapppd
+  # and assign observation type of 1 (assumed)
+  data.frame(read_csv(file = "D:/Manuscripts_localData/FrostBound_AQ/Datasets/mapppd/gentoo_presence_absence_assumptions.csv")) %>%
+    mutate(known_w = 0)) %>%
+  # determine for each site x season if breeding is observed or assumed
+  group_by(site_id, season) %>%
+  summarise(w = base::max(presence), known_w = base::max(known_w)) %>%
+  ungroup() %>%
+  # join with w_template to fill in missing site x seasons with no presence/absence data
+  right_join(w_template, by = c("site_id", "season")) %>%
+  # assign observation type as 0 (imputed)
+  mutate(known_w = replace(known_w, is.na(known_w), 0)) %>%
+  arrange(site_id, season) %>%
+  # impute missing presence/absence data using the following assumptions
+  # ASSSUMPTION: fill in NA between (1,1) with 1
+  # ASSSUMPTION: fill in NA between (0,1) with 0
+  # ASSSUMPTION: fill in NA between (1,0) with 1
+  # ASSSUMPTION: fill in NA between (.,1) and (1,.) with 1
+  # ASSSUMPTION: fill in NA between (.,0) and (0,.) with 0
+  dplyr::group_by(site_id) %>%
+  tidyr::fill(w, .direction = "downup") %>%
+  dplyr::ungroup() %>%
+  # create second site_id var for plotting sites alphabetically in ggplot
+  mutate(site_id_rev = factor(site_id, levels = rev(sort(unique(site_id))))) %>%
+  dplyr::select(site_id, site_id_rev, season, site, season_relative, w, known_w)
+
+# convert w to matrix to be used in model
+w <- w_df %>%
+  dplyr::select(site, season_relative, w) %>%
+  # create matrix where rows are sites and columns are seasons
+  pivot_wider(names_from = season_relative, values_from = w, names_sort = TRUE) %>%
+  dplyr::select(-site) %>%
+  as.matrix()
+
+
+abundance <- mapppdr::penguin_obs %>%
+  # keep all counts between min and max season
+  dplyr::filter(count > 0 & species_id == species & season >= min_season & season <= max_season) %>%
+  # join to get site index and initial season
+  right_join(SiteList, by = "site_id") %>%
+  # create relative season index 
+  mutate(season_relative = season - min_season + 1) %>%
+  # ASSUMPTION: increase accuracy category of all adult counts by + 3 with a max error of 5
+  rowwise() %>%
+  mutate(accuracy = replace(accuracy, type == "adults", base::min((accuracy[type == "adults"] + 3), 5))) %>%
+  ungroup() %>%  
+  mutate(type = replace(type, type == "adults", "nests")) %>%
+  # ASSUMPTION: keep maximum nest and chick count reported each season for a site
+  group_by(site_id, season, season_relative, type) %>%
+  arrange(desc(count), accuracy) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  # ASSUMPTION: convert accuracy to the following errors/precisions
+  mutate(sigma = case_when(
+    accuracy == 1 ~ 0.02490061, 
+    accuracy == 2 ~ 0.04955838,
+    accuracy == 3 ~ 0.1201131, 
+    accuracy == 4 ~ 0.2212992, 
+    accuracy == 5 ~ 0.4472728)) %>%
+  mutate(precision = case_when(
+    accuracy == 1 ~ 1/0.02490061^2, 
+    accuracy == 2 ~ 1/0.04955838^2,
+    accuracy == 3 ~ 1/0.1201131^2, 
+    accuracy == 4 ~ 1/0.2212992^2, 
+    accuracy == 5 ~ 1/0.4472728^2)) %>%  
+  dplyr::select(site_id, site, season, season_relative, initial_season, type, 
+                count, presence, accuracy, sigma, precision) %>%
+  arrange(site, season_relative, type, -count, accuracy, sigma, precision)  
+
+abundance_initial <- abundance %>%
+  # keep first observed count for each site's time series
+  dplyr::filter(initial_season == season_relative) %>%
+  # ASSUMPTION: if no nest count is available in the initial season and a chick count is then
+  # assume chick count is 1:1 nest count
+  group_by(site_id, season, site, season_relative) %>%
+  arrange(desc(type)) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  dplyr::select(site_id, season, site, season_relative, count, sigma, precision)
+
+abundance_nests <- abundance %>%
+  # keep all nest counts after the initial season
+  dplyr::filter(initial_season != season_relative & type == "nests") %>%
+  dplyr::select(site_id, season, site, season_relative, count, sigma, precision)
+
+abundance_chicks <- rbind(
+  # keep all chick counts after the initial season
+  abundance %>%
+    dplyr::filter(initial_season != season_relative & type == "chicks") %>%
+    dplyr::select(site_id, season, site, season_relative, count, sigma, precision),
+  # append chick counts from initial season that were not converted to nest counts
+  # meaning there was both a chick and nest count in the initial season
+  abundance %>%
+    dplyr::filter(initial_season == season_relative) %>%
+    group_by(site_id, season, site, season_relative) %>%
+    arrange(desc(type)) %>%
+    slice(2) %>%
+    ungroup() %>%
+    dplyr::select(site_id, season, site, season_relative, count, sigma, precision))
+
+# moment match alpha shape and rate parameters for breeding productivity
+mu <- .5
+sigma <- .25
+a <- (mu^2 - mu^3 - mu * sigma^3) / sigma^2
+b <- (mu - 2* mu^2 + mu^3 - sigma^2 + mu * sigma^3) / sigma^2
+
+# create the data list for the JAGS model
+model_data <- list(
+  nests = nrow(abundance_nests),
+  y_n = log(abundance_nests$count), 
+  precision_n = abundance_nests$precision,
+  site_n = abundance_nests$site,
+  season_n = abundance_nests$season_relative,
+  chicks = nrow(abundance_chicks),
+  y_c = log(abundance_chicks$count), 
+  precision_c = abundance_chicks$precision,
+  site_c = abundance_chicks$site,
+  season_c = abundance_chicks$season_relative,
+  y_i = log(abundance_initial$count),
+  precision_i = abundance_initial$precision,
+  n_sites = n_sites,
+  n_seasons = n_seasons,
+  s = as.vector(SiteList$initial_season),
+  w = w,
+  a = a,
+  b = b)
+
+
+```
+
+**JAGS Model**
+```{r}
+
+# Install and load necessary libraries
+# Optional installation lines are commented out. Uncomment to install if needed.
+# if (!require("rjags")) install.packages("rjags", dependencies = TRUE)
+# if (!require("coda")) install.packages("coda", dependencies = TRUE)
+library(rjags)   # JAGS interface for Bayesian modeling
+library(coda)    # Tools for MCMC output analysis
+library(dplyr)
+library(tidyr)
+library(readr)
+library(parallel) # Enables parallel processing
+
+# Define the file path for the JAGS model script
+model_file_path <- "D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/jags_model.jags"
+
+# Write the JAGS model code to a text file
+sink(model_file_path)
+cat("
+model {
+
+# Define prior for process variance (sigma) and precision (tau)
+sigma ~ dunif(0, 1)         # Uniform prior for sigma, allowing variation between 0 and 1
+tau <- pow(sigma, -2)       # Precision is inverse squared sigma
+
+# Breeding success prior for chick abundance
+for (i in 1:chicks) {
+  alpha[i] ~ dbeta(a, b)    # Beta distribution for breeding success, based on input parameters a and b
+}
+
+# Initial abundance for each site
+for (i in 1:n_sites) {
+  lz[i, s[i]] ~ dnorm(0, .001)  # Normally distributed initial abundance with high variance
+}
+
+# Define a prior for the intercept (beta) to allow variability in population growth
+beta ~ dunif(-.5, .5)
+
+# Site-specific effects (eta) for each site
+for (i in 1:n_sites) {
+  eta[i] ~ dnorm(0, tau_site)
+}
+sigma_site ~ dunif(0, 1)       # Uniform prior for site-level variation
+tau_site <- pow(sigma_site, -2)
+
+# Seasonal effects (epsilon) for each season
+for (t in 1:n_seasons) {
+  epsilon[t] ~ dnorm(0, tau_season)
+}
+sigma_season ~ dunif(0, 1)     # Uniform prior for season-level variation
+tau_season <- pow(sigma_season, -2)
+
+# Observation model for nest data
+for (i in 1:nests) {
+  y_n[i] ~ dnorm(mu_y_n[i], precision_n[i])   # Observed nest counts with specified precision
+  mu_y_n[i] <- lz[site_n[i], season_n[i]] - 1/(2 * precision_n[i])  # Mean adjusted for precision
+  y_n_new[i] ~ dnorm(mu_y_n[i], precision_n[i])   # Simulated nest counts for predictive checks
+  y_n_sq[i] <- pow((y_n[i] - mu_y_n[i]), 2)       # Squared residuals for observed nest counts
+  y_n_sq_new[i] <- pow((y_n_new[i] - mu_y_n[i]), 2)  # Squared residuals for simulated nest counts
+}
+
+# Observation model for chick data
+for (i in 1:chicks) {
+  N[i] <- 2 * round(exp(lz[site_c[i], season_c[i]]))   # Expected population size for chicks
+  z_c[i] ~ dbin(alpha[i], N[i])                        # Binomially distributed chick abundance
+  lz_c[i] <- log(z_c[i])                               # Log-transformed abundance
+  y_c[i] ~ dnorm(mu_y_c[i], precision_c[i])            # Observed chick counts with specified precision
+  mu_y_c[i] <- lz_c[i] - 1/(2 * precision_c[i])        # Mean for chick data, adjusted for precision
+  y_c_new[i] ~ dnorm(mu_y_c[i], precision_c[i])        # Simulated chick counts for predictive checks
+  y_c_sq[i] <- pow((y_c[i] - mu_y_c[i]), 2)            # Squared residuals for observed chick counts
+  y_c_sq_new[i] <- pow((y_c_new[i] - mu_y_c[i]), 2)    # Squared residuals for simulated chick counts
+}
+
+# Process model for population growth
+for (i in 1:n_sites) {
+  for (t in 1:n_seasons) {
+    zr[i, t] <- beta + eta[i] + epsilon[t]   # Growth rate influenced by site and seasonal effects
+    lza[i, t] <- lz[i, t] * w[i, t]          # Adjusted abundance accounting for site-season presence
+  }
+}  
+
+# Initial year abundance data model
+for (i in 1:n_sites) {
+  y_i[i] ~ dnorm(mu_y_i[i], precision_i[i])   # Observed abundance with precision for initial season
+  mu_y_i[i] <- lz[i, s[i]] - 1/(2 * precision_i[i])  # Mean adjusted for precision
+  y_i_new[i] ~ dnorm(mu_y_i[i], precision_i[i])      # Simulated initial counts for predictive checks
+  y_i_sq[i] <- pow((y_i[i] - mu_y_i[i]), 2)          # Squared residuals for observed initial counts
+  y_i_sq_new[i] <- pow((y_i_new[i] - mu_y_i[i]), 2)  # Squared residuals for simulated initial counts
+}
+
+# Population abundance dynamics for subsequent seasons
+for (i in 1:n_sites) {
+  for (t in (s[i] + 1):n_seasons) {
+    lz[i, t] ~ dnorm(mu_lz[i, t], tau)              # Abundance in each season based on prior year
+    mu_lz[i, t] <- lz[i, t - 1] + zr[i, t] - 1/(2 * tau)  # Process model with adjusted precision
+  }
+}
+
+# Population abundance dynamics for pre-initial seasons
+for (i in 1:n_sites) {
+  for (t in 1:(s[i] - 1)) {
+    lz[i, s[i] - t] ~ dnorm(mu_lz[i, s[i] - t], tau)       # Prior abundance modeled on next season
+    mu_lz[i, s[i] - t] <- lz[i, s[i] - t + 1] - zr[i, s[i] - t + 1] - 1/(2 * tau)
+  }
+}
+ 
+# Posterior predictive checks
+y_n_sqs <- sum(y_n_sq[])      # Sum of squared residuals for nests (observed)
+y_n_sqs_new <- sum(y_n_sq_new[])  # Sum of squared residuals for nests (simulated)
+y_i_sqs <- sum(y_i_sq[])      # Sum of squared residuals for initial season (observed)
+y_i_sqs_new <- sum(y_i_sq_new[])  # Sum of squared residuals for initial season (simulated)
+y_c_sqs <- sum(y_c_sq[])      # Sum of squared residuals for chicks (observed)
+y_c_sqs_new <- sum(y_c_sq_new[])  # Sum of squared residuals for chicks (simulated)
+
+# Derived quantities for growth rate calculation
+for (i in 1:n_sites) {
+  for (t in 2:n_seasons) {
+    l_a[i, t - 1] <- exp(lz[i, t] - lz[i, t - 1])   # Annual growth based on log-abundance change
+    l_p[i, t - 1] <- exp(zr[i, t])                  # Growth rate (zr) transformation
+    lw_a[i, t - 1] <- ifelse(sum(w[i, (t-1):t]) == 2, l_a[i, t - 1], 1)   # Weighted growth rate
+    lw_p[i, t - 1] <- ifelse(sum(w[i, (t-1):t]) == 2, l_p[i, t - 1], 1)   # Weighted persistence rate
+  }
+}
+
+# Geometric mean calculations for site-specific growth and persistence
+for (i in 1:n_sites) {
+  x[i, 1:n_seasons] <- ifelse(sum(w[i, 1:n_seasons]) > 1, w[i, 1:n_seasons], rep(1, n_seasons)) 
+  gl_a[i] <- ifelse(sum(w[i, 1:n_seasons]) > 1, pow(prod(lw_a[i, ]), (1/(sum(x[i, 1:n_seasons]) - 1))), 0)
+  gl_p[i] <- ifelse(sum(w[i, 1:n_seasons]) > 1, pow(prod(lw_p[i, ]), (1/(sum(x[i, 1:n_seasons]) - 1))), 0)
+}
+
+}", fill = TRUE)
+sink() # Complete writing of the model to file
+
+# Prepare the input data list for JAGS model
+model_data <- list(
+  nests = nrow(abundance_nests),    # Total number of nest observations
+  y_n = log(abundance_nests$count), # Log-transformed nest counts
+  precision_n = abundance_nests$precision, # Precision for each nest observation
+  site_n = abundance_nests$site,    # Site indices for nest observations
+  season_n = abundance_nests$season_relative, # Season indices for nest observations
+  chicks = nrow(abundance_chicks),  # Total number of chick observations
+  y_c = log(abundance_chicks$count), # Log-transformed chick counts
+  precision_c = abundance_chicks$precision, # Precision for each chick observation
+  site_c = abundance_chicks$site,    # Site indices for chick observations
+  season_c = abundance_chicks$season_relative, # Season indices for chick observations
+  y_i = log(abundance_initial$count), # Log-transformed initial season counts
+  precision_i = abundance_initial$precision, # Precision for initial counts
+  n_sites = n_sites,               # Number of unique sites
+  n_seasons = n_seasons,           # Total number of seasons
+  s = as.vector(SiteList$initial_season), # Initial seasons for each site
+  w = w,                           # Presence-absence matrix for each site-season
+  a = a,                           # Shape parameter for breeding productivity
+  b = b                            # Rate parameter for breeding productivity
+)
+
+
+
+random_inits <- function(model_data) {
+  # Generate a random seed for reproducibility
+  seed = runif(1, 1, 100000)
+  
+  # Initialize model parameters with random values within specified ranges
+  beta <- runif(1, -.025, .025)        # Random intercept for growth rate
+  sigma_site <- runif(1, .025, .05)    # Standard deviation for site-level effects
+  sigma_season <- runif(1, .05, .1)    # Standard deviation for season-level effects
+  sigma <- runif(1, .05, .1)           # Standard deviation for process variance
+
+  # Extract key values from model_data for use in initializations
+  chicks <- model_data$chicks          # Total number of chick observations
+  n_sites <- model_data$n_sites        # Number of unique sites
+  n_seasons <- model_data$n_seasons    # Number of seasons in the study period
+  s <- model_data$s                    # Initial season indices for each site
+  y_c <- model_data$y_c                # Log-transformed chick counts
+  y_i <- model_data$y_i                # Log-transformed initial season counts
+  site_c <- model_data$site_c          # Site indices for chick observations
+  season_c <- model_data$season_c      # Season indices for chick observations
+  a <- model_data$a                    # Beta distribution shape parameter for chick survival
+  b <- model_data$b                    # Beta distribution rate parameter for chick survival
+
+  # Initialize random effects for sites and seasons
+  eta <- rnorm(n_sites, 0, sigma_site)       # Site-specific random effects
+  epsilon <- rnorm(n_seasons, 0, sigma_season) # Season-specific random effects
+  
+  # Initialize alpha for chick survival using the beta distribution
+  alpha <- rbeta(chicks, a, b)               # Chick survival rates for each observation
+
+  # Initialize abundance and growth rate matrices
+  lz <- zr <- array(NA, dim = c(n_sites, n_seasons))  # Matrices for abundance (lz) and growth rate (zr)
+
+  # Loop through each site to initialize abundance (lz) and growth rate (zr) across seasons
+  for (i in 1:n_sites) {
+    # Set initial abundance (lz) for the starting season based on mean initial chick count
+    lz[i, s[i]] <- mean(y_i[i], na.rm = TRUE)
+    
+    # Forward initialization: calculate abundance for each season after the initial season
+    for (t in (s[i] + 1):n_seasons) {
+      zr[i, t] <- beta + eta[i] + epsilon[t]                # Growth rate as a function of intercept and random effects
+      lz[i, t] <- rnorm(1, lz[i, (t - 1)] + zr[i, t] - sigma^2 / 2, sigma) # Abundance based on previous season and growth rate
+    }
+    
+    # Backward initialization: calculate abundance for seasons before the initial season
+    for (t in 1:(s[i] - 1)) {
+      zr[i, (s[i] - t + 1)] <- beta + eta[i] + epsilon[(s[i] - t + 1)]  # Growth rate using random effects
+      lz[i, (s[i] - t)] <- rnorm(1, lz[i, (s[i] - t + 1)] - zr[i, (s[i] - t + 1)] - sigma^2 / 2, sigma)
+      # Calculate abundance by extrapolating backward from the initial season
+    }
+  }
+  
+  # Initialize chick abundance based on calculated abundance and survival rates
+  z_c <- N <- NA  # Empty vectors for chick abundance and population size
+
+  # Loop through each chick observation to calculate chick abundance (z_c)
+  for (i in 1:chicks) {
+    # Ensure abundance is non-negative for each chick observation's site and season
+    if (lz[site_c[i], season_c[i]] < 0) lz[site_c[i], season_c[i]] <- 0
+    
+    # Calculate expected population size as twice the rounded abundance
+    N[i] <- 2 * round(exp(lz[site_c[i], season_c[i]]))
+    
+    # Calculate chick abundance using a binomial distribution, with a minimum of 1 to avoid zeroes
+    z_c[i] <- base::max(rbinom(1, prob = alpha[i], N[i]), 1)
+  }
+  
+  # Return a list of initialized values for the JAGS model
+  return(list(
+    sigma = sigma,                # Process variance
+    sigma_site = sigma_site,      # Site-level variance
+    sigma_season = sigma_season,  # Season-level variance
+    beta = beta,                  # Growth rate intercept
+    eta = eta,                    # Site-specific random effects
+    epsilon = epsilon,            # Season-specific random effects
+    alpha = alpha,                # Chick survival rates
+    lz = lz,                      # Site-season abundance matrix
+    z_c = z_c,                    # Chick abundance values
+    .RNG.name = "base::Mersenne-Twister", # RNG for reproducibility in JAGS
+    .RNG.seed = seed              # Random seed for reproducibility
+  ))
+}
+
+save(random_inits, file = "D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/random_inits.rda")
+expect_error(random_inits(model_data), NA)
+
+
+n.chains <- 6
+n.adapt <- 3000
+n.update <- 300000
+n.iter <- 200000
+thin <- 200
+cl <- makeCluster(n.chains)
+
+cvars <- c("model_data", "n.adapt", "n.update", "n.iter", "thin", "params", "random_inits")
+params <- c("beta", "sigma", "sigma_site", "sigma_season", "alpha", "epsilon", "eta", "z_c", "lz", 
+            "gl_a", "l_a", "y_i_new", "y_n_new", "y_c_new", "y_n_sqs", "y_n_sqs_new", "y_i_sqs_new",
+            "y_i_sqs", "y_c_sqs", "y_c_sqs_new", "lz_c", "lza")
+
+parallel::clusterExport(cl, cvars)
+
+out <- clusterEvalQ(cl, {
+  library(rjags)
+  inits <- random_inits(model_data)
+  jm = jags.model("D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/jags_model.jags", data = model_data, n.chains = 1, n.adapt = n.adapt, 
+                  inits = inits)
+  update(jm, n.iter = n.update)
+  zm = coda.samples(jm, variable.names = params, n.iter = n.iter, thin = thin)
+  return(as.mcmc(zm))
+})
+stopCluster(cl)
+model_data_rinits_output = mcmc.list(out)  
+save(model_data_rinits_output, file = "D:/Manuscripts_localData/FrostBound_AQ/Results/gentoo-abundance-model/model_data_rinits_output.rda")
+
+
+model_data_rinits_output <- read
+
+MCMCsummary(model_data_rinits_output, params = c("beta", "sigma", "sigma_site", "sigma_season"), 
+            HPD = TRUE, hpd_prob = .95, round = 3)
+
+#Posterior Predictive Checks
+params <- c("y_i_sqs", "y_i_sqs_new", "y_n_sqs", "y_n_sqs_new", "y_c_sqs", "y_c_sqs_new")
+MCMCsummary(model_data_rinits_output, params = params, n.eff = FALSE, round = 3)
+```
+
+
+
+
+
 
 **Generate Gentoo Growth Parameters**
 
