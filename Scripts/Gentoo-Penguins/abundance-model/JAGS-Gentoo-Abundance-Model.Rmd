@@ -488,8 +488,6 @@ MCMCsummary(model_data_rinits_output, params = params, n.eff = FALSE, round = 3)
 
 
 
-
-
 **Generate Gentoo Growth Parameters**
 
 ```{r}
@@ -622,6 +620,7 @@ write.csv(final_data, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-ab
 print(head(final_data))
 
 ```
+
 
 **calculate and plot geometric mean of growth rates** 
 ```{r}
@@ -1979,7 +1978,6 @@ ggsave("growth_rate_effects.png", plot = final_plot, bg = bg, height = 10, width
 
 
 
-
 **Compile Significant Results**
 ```{r}
 
@@ -2021,84 +2019,244 @@ cat("Combined results have been saved to:", output_file, "\n")
 ```
 
 
+```{r gentoo mixed effects models SOI}
+
+###############################################################################
+# Load Necessary Libraries
+###############################################################################
+library(httr)       # for GET() if not already loaded
+library(dplyr)
+library(tidyr)      # for pivot_longer
+library(lubridate)
+library(nlme)       # for mixed-effects (lme) or generalized least squares (gls)
+library(readr)      # if needed for reading in .csv data
+library(ggplot2)    # for quick plotting
+
+data_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/"
+###############################################################################
+# 1. Load Gentoo Growth Data
+###############################################################################
+# This presumes you have a CSV with columns:
+#   site (colony ID)
+#   season (some integer or factor indicating sequential season)
+#   year (calendar year, e.g. 1970 + season - 1)
+#   growth_rate (mean abundance / lagged mean abundance)
+# Adjust path or load method as needed.
+
+gentoo_params <- read_csv(
+  "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/modeled_gentoo_parameters.csv"
+)
+str(gentoo_params)
+
+
+###############################################################################
+# 2. Download and Parse SOI Data Directly from NOAA
+###############################################################################
+url <- "https://www.cpc.ncep.noaa.gov/data/indices/soi"
+
+soi_raw <- tryCatch({
+  GET(url)
+}, error = function(e) {
+  stop("Error fetching SOI data: ", e)
+})
+
+soi_text <- content(soi_raw, "text")
+
+# Split into lines
+soi_lines <- strsplit(soi_text, "\n")[[1]]
+
+# Identify where the standardized data starts
+standardized_soi_start <- grep("STANDARDIZED    DATA", soi_lines)
+
+# Extract lines that contain actual data
+soi_standardized_lines <- soi_lines[(standardized_soi_start + 3):length(soi_lines)]
+# Remove invalid data lines containing "-999.9"
+soi_standardized_lines <- soi_standardized_lines[!grepl("-999.9", soi_standardized_lines)]
+
+# Convert to a data.frame
+soi_data <- read.table(text = soi_standardized_lines, fill = TRUE, stringsAsFactors = FALSE)
+colnames(soi_data) <- c("Year", month.abb)  # e.g., Year, Jan, Feb, Mar, ..., Dec
+
+# Convert Year to integer
+soi_data <- soi_data %>%
+  mutate(Year = as.integer(Year))
+
+# Reshape to long format
+soi_data_long <- soi_data %>%
+  pivot_longer(
+    cols = -Year,
+    names_to = "Month",
+    values_to = "SOI"
+  ) %>%
+  mutate(
+    Month = match(Month, month.abb),
+    SOI   = as.numeric(SOI)
+  ) %>%
+  filter(!is.na(SOI))   # remove NA rows
+
+# Optionally, save this to an RDS for future use
+saveRDS(soi_data_long, file = file.path(data_dir, "soi_data_long.rds"))
+# After this point, if you wanted to skip re-downloading, you could load it back with:
+# soi_data_long <- readRDS("C:/temp/soi_data_long.rds")
+
+head(soi_data_long)
 
 
 
+##############################################################################
+# 3. Prepare Winter (June–Sept) SOI and Create Lagged Columns
+###############################################################################
+# Filter to winter months
+winter_soi <- soi_data_long %>%
+  filter(Month %in% c(6, 7, 8, 9)) %>%
+  group_by(Year) %>%
+  summarise(
+    winter_soi = mean(SOI, na.rm = TRUE),
+    .groups = "drop"
+  )
 
- str(penguin_abundance_data)
-Classes ‘data.table’ and 'data.frame':	7182 obs. of  15 variables:
- $ V1                : int  1 2 3 4 5 6 7 8 9 10 ...
- $ site_id           : chr  "AITC" "AITC" "AITC" "AITC" ...
- $ site_name         : chr  "Barrientos Island (Aitcho Islands)" "Barrientos Island (Aitcho Islands)" "Barrientos Island (Aitcho Islands)" "Barrientos Island (Aitcho Islands)" ...
- $ ccamlr_id         : num  48.1 48.1 48.1 48.1 48.1 48.1 48.1 48.1 48.1 48.1 ...
- $ site              : int  1 1 1 1 1 1 1 1 1 1 ...
- $ initial_season    : int  30 30 30 30 30 30 30 30 30 30 ...
- $ latitude          : num  -62.4 -62.4 -62.4 -62.4 -62.4 ...
- $ longitude         : num  -59.8 -59.8 -59.8 -59.8 -59.8 ...
- $ mean_abundance    : num  126 143 154 166 180 ...
- $ median_abundance  : num  22.2 25.8 29.2 33.4 37.2 ...
- $ lower_95_abundance: num  0.475 0.606 0.701 0.899 1.046 ...
- $ upper_95_abundance: num  891 962 1066 1098 1136 ...
- $ season            : int  1 2 3 4 5 6 7 8 9 10 ...
- $ growth_rate       : num  NA 1.13 1.07 1.08 1.08 ...
- $ year              : int  1970 1971 1972 1973 1974 1975 1976 1977 1978 1979 ...
- - attr(*, ".internal.selfref")=<externalptr> 
+# Create multiple lag columns (e.g., 1–5 year lags)
+max_lag <- 5
+winter_soi_lags <- winter_soi
 
- penguin_abundance_data
-        V1 site_id                          site_name ccamlr_id site initial_season latitude longitude mean_abundance median_abundance
-   1:    1    AITC Barrientos Island (Aitcho Islands)      48.1    1             30 -62.4071  -59.7517       126.3283         22.23919
-   2:    2    AITC Barrientos Island (Aitcho Islands)      48.1    1             30 -62.4071  -59.7517       143.1843         25.79221
-   3:    3    AITC Barrientos Island (Aitcho Islands)      48.1    1             30 -62.4071  -59.7517       153.8049         29.16895
-   4:    4    AITC Barrientos Island (Aitcho Islands)      48.1    1             30 -62.4071  -59.7517       166.2261         33.39426
-   5:    5    AITC Barrientos Island (Aitcho Islands)      48.1    1             30 -62.4071  -59.7517       179.9120         37.22348
-  ---                                                                                                                                 
-7178: 7178    YANK                      Yankee Harbor      48.1  133             17 -62.5257  -59.7687      6777.7819       6222.52283
-7179: 7179    YANK                      Yankee Harbor      48.1  133             17 -62.5257  -59.7687      6333.8677       5812.61450
-7180: 7180    YANK                      Yankee Harbor      48.1  133             17 -62.5257  -59.7687      4878.7842       4639.47868
-7181: 7181    YANK                      Yankee Harbor      48.1  133             17 -62.5257  -59.7687      5812.5561       5810.36291
-7182: 7182    YANK                      Yankee Harbor      48.1  133             17 -62.5257  -59.7687      6367.1223       5980.06667
-      lower_95_abundance upper_95_abundance season growth_rate year
-   1:          0.4746036           891.2210      1          NA 1970
-   2:          0.6055929           962.2192      2   1.1334300 1971
-   3:          0.7006604          1065.6057      3   1.0741740 1972
-   4:          0.8986447          1098.3622      4   1.0807600 1973
-   5:          1.0463629          1135.9525      5   1.0823328 1974
-  ---                                                              
-7178:       2700.6075429         14117.7663     50   1.1135183 2019
-7179:       2675.8846639         12970.1751     51   0.9345045 2020
-7180:       2477.4954917          8559.3868     52   0.7702693 2021
-7181:       5525.2365224          6100.5236     53   1.1913944 2022
-7182:       2932.2791716         12073.9408     54   1.0954083 2023
-> 
+for (lag_i in 1:max_lag) {
+  lag_col <- paste0("winter_soi_lag", lag_i)
+  # For row i (Year N), the new column is winter_soi from row i-lag_i (Year N-lag_i).
+  winter_soi_lags <- winter_soi_lags %>%
+    mutate(!!lag_col := dplyr::lag(winter_soi, n = lag_i, order_by = Year))
+}
+
+head(winter_soi_lags)
 
 
-> str(ice_data)
-Classes ‘data.table’ and 'data.frame':	53240 obs. of  6 variables:
- $ date          : IDate, format: "1981-06-02" "1981-06-04" "1981-06-06" "1981-06-08" ...
- $ mean_sic      : num  0.358 0.414 0.48 0.442 0.485 ...
- $ sd_sic        : num  0.407 0.385 0.401 0.405 0.41 ...
- $ ice_extent_km2: num  76875 96406 100469 92500 105938 ...
- $ Threshold     : num  0.15 0.15 0.15 0.15 0.15 0.15 0.15 0.15 0.15 0.15 ...
- $ HomeRangeSize : chr  "100km" "100km" "100km" "100km" ...
- - attr(*, ".internal.selfref")=<externalptr> 
+###############################################################################
+# 4. Merge Lagged SOI Into Gentoo Growth Data
+###############################################################################
+# 'gentoo_params' has 'year'. We'll left_join by (year == Year).
+# For row with year=1976, winter_soi_lag1 is the winter_soi from 1975, etc.
+
+merged_data <- gentoo_params %>%
+  left_join(winter_soi_lags, by = c("year" = "Year"))
+
+head(merged_data)
+
+merged_data_complete <- merged_data %>%
+  filter(!is.na(winter_soi_lag1))  # or drop any row missing any relevant lag
 
 
-> ice_data
-             date  mean_sic    sd_sic ice_extent_km2 Threshold HomeRangeSize
-    1: 1981-06-02 0.3582459 0.4068131       76875.00      0.15         100km
-    2: 1981-06-04 0.4138860 0.3853788       96406.25      0.15         100km
-    3: 1981-06-06 0.4800201 0.4010149      100468.75      0.15         100km
-    4: 1981-06-08 0.4416560 0.4049839       92500.00      0.15         100km
-    5: 1981-06-10 0.4850076 0.4096986      105937.50      0.15         100km
-   ---                                                                      
-53236: 2023-09-26 0.2215939 0.3025081       26875.00      0.15          50km
-53237: 2023-09-27 0.1268865 0.2715207       15000.00      0.15          50km
-53238: 2023-09-28 0.2127582 0.3102216       25312.50      0.15          50km
-53239: 2023-09-29 0.1705984 0.3001898       16875.00      0.15          50km
-53240: 2023-09-30 0.1757676 0.2820827       20625.00      0.15          50km
+###############################################################################
+# 5. Example Mixed-Effects Model at the Colony Level
+###############################################################################
+# We'll do a simple model with 1-year lag as a demonstration.
+# correlation=corAR1(...) addresses time-series autocorrelation within each site.
+
+model_lme <- lme(
+  fixed = growth_rate ~ winter_soi_lag1,
+  random = ~ 1 | site,
+  correlation = corAR1(form = ~ year | site),  # AR(1) structure by site
+  data = merged_data,
+  na.action = na.omit
+)
+
+summary(model_lme)
+
+
+###############################################################################
+# 6. Mixed-Effects Model with Random Slopes
+###############################################################################
+# If we suspect each site might respond differently to winter_soi_lag1, let slope vary by site.
+# This is more flexible, but requires enough data per site to estimate slopes stably.
+
+model_lme_slopes <- lme(
+  fixed = growth_rate ~ winter_soi_lag1,
+  random = ~ winter_soi_lag1 | site,
+  correlation = corAR1(form = ~ year | site),
+  data = merged_data,
+  na.action = na.omit,
+  control = lmeControl(
+    opt = "optim",        # or "nlminb", or "optimx" (if installed)
+    msMaxIter = 200,      # more iterations for the final step
+    msVerbose = TRUE      # print progress
+  )
+)
+
+summary(model_lme_slopes)
+
+
+###############################################################################
+# 7. Aggregated "Mean or Median" Growth Rate Approach
+###############################################################################
+# Some might want to see how the entire region's growth rate (mean or median) by year
+# correlates with lagged SOI.
+
+annual_growth <- merged_data %>%
+  group_by(year) %>%
+  summarise(
+    mean_growth   = mean(growth_rate, na.rm = TRUE),
+    median_growth = median(growth_rate, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Merge that with the lagged winter SOI
+annual_merged <- annual_growth %>%
+  left_join(winter_soi_lags, by = c("year" = "Year"))
+
+head(annual_merged)
+
+# Simple correlation or linear model example
+cor.test(annual_merged$mean_growth, annual_merged$winter_soi_lag1, use="complete.obs")
+
+lm_mean <- lm(mean_growth ~ winter_soi_lag1, data = annual_merged)
+summary(lm_mean)
+
+# If you want to handle autocorrelation at the annual time scale, do a GLS with AR(1):
+gls_mean <- gls(
+  mean_growth ~ winter_soi_lag1,
+  correlation = corAR1(form = ~ year),
+  data = annual_merged,
+  na.action = na.omit
+)
+summary(gls_mean)
+
+
+###############################################################################
+# 8. Quick Visualization of Correlations with Multiple Lags
+###############################################################################
+# We'll compute correlation of each winter_soi_lagX with mean_growth.
+
+results_list <- list()
+for (lag_i in 1:max_lag) {
+  colname <- paste0("winter_soi_lag", lag_i)
+  tmp <- annual_merged %>%
+    filter(!is.na(.data[[colname]]), !is.na(mean_growth))
+  
+  ctest <- cor.test(tmp[[colname]], tmp$mean_growth)
+  results_list[[lag_i]] <- data.frame(
+    lag    = lag_i,
+    cor_est = ctest$estimate,
+    p_val   = ctest$p.value
+  )
+}
+
+corr_df <- do.call(rbind, results_list)
+corr_df
+
+ggplot(corr_df, aes(x = factor(lag), y = cor_est)) +
+  geom_bar(stat="identity", fill="skyblue") +
+  geom_text(aes(label = round(cor_est, 2)), vjust = -1.2) +
+  labs(
+    title = "Correlation of Mean Growth vs. Lagged Winter SOI",
+    x = "Lag (Years)",
+    y = "Pearson Correlation"
+  ) +
+  theme_minimal()
+
+###############################################################################
+# End of Script
+###############################################################################
+
+
+```
 
 
 
-2. I want to be able to plot the linear models (line + confidence intervals), overlaid on the points used for each model.
-
-3. I want to make sure I can load these back up without having to run the entire script becuase it takes a long time
