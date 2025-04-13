@@ -2024,232 +2024,251 @@ cat("Combined results have been saved to:", output_file, "\n")
 ###############################################################################
 # Load Necessary Libraries
 ###############################################################################
-library(httr)       # for GET() if not already loaded
+library(httr)       # for GET()
 library(dplyr)
-library(tidyr)      # for pivot_longer
+library(tidyr)      # for pivot_longer()
 library(lubridate)
-library(nlme)       # for mixed-effects (lme) or generalized least squares (gls)
-library(readr)      # if needed for reading in .csv data
-library(ggplot2)    # for quick plotting
+library(nlme)       # for mixed-effects models (lme)
+library(readr)      # for reading CSVs
+library(ggplot2)    # for plotting
+library(tibble)     # for rownames_to_column()
+library(knitr)      # for kable()
+library(lme4)       # for lmer() models and bootMer()
+library(mgcv)       # for GAMM models
 
+###############################################################################
+# Define Data Directory and Load Data
+###############################################################################
 data_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/"
-###############################################################################
-# 1. Load Gentoo Growth Data
-###############################################################################
-# This presumes you have a CSV with columns:
-#   site (colony ID)
-#   season (some integer or factor indicating sequential season)
-#   year (calendar year, e.g. 1970 + season - 1)
-#   growth_rate (mean abundance / lagged mean abundance)
-# Adjust path or load method as needed.
-
-gentoo_params <- read_csv(
-  "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/modeled_gentoo_parameters.csv"
-)
+gentoo_params <- read_csv(file.path(data_dir, "modeled_gentoo_parameters.csv"))
 str(gentoo_params)
 
-
 ###############################################################################
-# 2. Download and Parse SOI Data Directly from NOAA
+# Download and Parse SOI Data from NOAA
 ###############################################################################
 url <- "https://www.cpc.ncep.noaa.gov/data/indices/soi"
-
-soi_raw <- tryCatch({
-  GET(url)
-}, error = function(e) {
-  stop("Error fetching SOI data: ", e)
-})
-
+soi_raw <- tryCatch(GET(url), error = function(e) { stop("Error fetching SOI data: ", e) })
 soi_text <- content(soi_raw, "text")
-
-# Split into lines
 soi_lines <- strsplit(soi_text, "\n")[[1]]
-
-# Identify where the standardized data starts
 standardized_soi_start <- grep("STANDARDIZED    DATA", soi_lines)
-
-# Extract lines that contain actual data
 soi_standardized_lines <- soi_lines[(standardized_soi_start + 3):length(soi_lines)]
-# Remove invalid data lines containing "-999.9"
 soi_standardized_lines <- soi_standardized_lines[!grepl("-999.9", soi_standardized_lines)]
 
-# Convert to a data.frame
 soi_data <- read.table(text = soi_standardized_lines, fill = TRUE, stringsAsFactors = FALSE)
-colnames(soi_data) <- c("Year", month.abb)  # e.g., Year, Jan, Feb, Mar, ..., Dec
+colnames(soi_data) <- c("Year", month.abb)
+soi_data <- soi_data %>% mutate(Year = as.integer(Year))
 
-# Convert Year to integer
-soi_data <- soi_data %>%
-  mutate(Year = as.integer(Year))
-
-# Reshape to long format
 soi_data_long <- soi_data %>%
-  pivot_longer(
-    cols = -Year,
-    names_to = "Month",
-    values_to = "SOI"
-  ) %>%
+  pivot_longer(-Year, names_to = "Month", values_to = "SOI") %>%
   mutate(
     Month = match(Month, month.abb),
     SOI   = as.numeric(SOI)
   ) %>%
-  filter(!is.na(SOI))   # remove NA rows
+  filter(!is.na(SOI))
 
-# Optionally, save this to an RDS for future use
+# Optionally save the processed data for future use
 saveRDS(soi_data_long, file = file.path(data_dir, "soi_data_long.rds"))
-# After this point, if you wanted to skip re-downloading, you could load it back with:
-# soi_data_long <- readRDS("C:/temp/soi_data_long.rds")
-
 head(soi_data_long)
 
-
-
-##############################################################################
-# 3. Prepare Winter (June–Sept) SOI and Create Lagged Columns
 ###############################################################################
-# Filter to winter months
+# Prepare Winter SOI and Create Lagged Variables (June–Sept)
+###############################################################################
 winter_soi <- soi_data_long %>%
   filter(Month %in% c(6, 7, 8, 9)) %>%
   group_by(Year) %>%
-  summarise(
-    winter_soi = mean(SOI, na.rm = TRUE),
-    .groups = "drop"
-  )
+  summarise(winter_soi = mean(SOI, na.rm = TRUE), .groups = "drop")
 
-# Create multiple lag columns (e.g., 1–5 year lags)
 max_lag <- 5
 winter_soi_lags <- winter_soi
-
 for (lag_i in 1:max_lag) {
   lag_col <- paste0("winter_soi_lag", lag_i)
-  # For row i (Year N), the new column is winter_soi from row i-lag_i (Year N-lag_i).
   winter_soi_lags <- winter_soi_lags %>%
     mutate(!!lag_col := dplyr::lag(winter_soi, n = lag_i, order_by = Year))
 }
-
 head(winter_soi_lags)
 
-
 ###############################################################################
-# 4. Merge Lagged SOI Into Gentoo Growth Data
+# Merge SOI Lags into Gentoo Growth Data
 ###############################################################################
-# 'gentoo_params' has 'year'. We'll left_join by (year == Year).
-# For row with year=1976, winter_soi_lag1 is the winter_soi from 1975, etc.
-
 merged_data <- gentoo_params %>%
   left_join(winter_soi_lags, by = c("year" = "Year"))
+merged_data_complete <- merged_data %>% filter(!is.na(winter_soi_lag1))
+head(merged_data_complete)
 
-head(merged_data)
+###############################################################################
+# Example Diagnostic Plots for an nlme Model (Random Slopes)
+###############################################################################
+# Suppose we have a random-slope model named model_lme_slopes
+par(mfrow = c(2, 2))
+plot(model_lme_slopes)         # Residuals vs. Fitted, etc.
+qqnorm(resid(model_lme_slopes))
+qqline(resid(model_lme_slopes))
 
-merged_data_complete <- merged_data %>%
-  filter(!is.na(winter_soi_lag1))  # or drop any row missing any relevant lag
+# Residual vs. Fitted and QQ-Plot (for your final random-intercept model)
+par(mfrow=c(1,2))
+plot(model_random_intercept, which = 1)  # Residuals vs. Fitted
+qqnorm(resid(model_random_intercept, type = 'p'))  
+qqline(resid(model_random_intercept, type = 'p'))  # QQ-Plot
 
 
 ###############################################################################
-# 5. Example Mixed-Effects Model at the Colony Level
+# Fit Mixed-Effects Models for Different Lag Terms using nlme
 ###############################################################################
-# We'll do a simple model with 1-year lag as a demonstration.
-# correlation=corAR1(...) addresses time-series autocorrelation within each site.
+model_list <- list()
+for (lag in 1:5) {
+  lag_term <- paste0("winter_soi_lag", lag)
+  fixed_formula <- as.formula(paste("growth_rate ~", lag_term))
+  random_formula <- as.formula(paste("~", lag_term, "| site"))
+  
+  model <- lme(
+    fixed = fixed_formula,
+    random = random_formula,
+    correlation = corAR1(form = ~ year | site),
+    data = merged_data,
+    na.action = na.omit,
+    control = lmeControl(opt = "optim", msMaxIter = 500)
+  )
+  
+  model_list[[lag]] <- model
+  cat("Lag", lag, "AIC:", AIC(model), "\n")
+}
 
-model_lme <- lme(
-  fixed = growth_rate ~ winter_soi_lag1,
-  random = ~ 1 | site,
-  correlation = corAR1(form = ~ year | site),  # AR(1) structure by site
+###############################################################################
+# Refit a Model Using lmer (for Bootstrapping with bootMer)
+###############################################################################
+model_lmer <- lmer(growth_rate ~ winter_soi_lag1 + (winter_soi_lag1 | site),
+                   data = merged_data, REML = TRUE)
+summary(model_lmer)  # May give "boundary (singular) fit" warnings
+
+boot_results <- bootMer(
+  model_lmer,
+  FUN = function(mod) fixef(mod),
+  nsim = 1000
+)
+print(boot_results)
+
+###############################################################################
+# Geographical Visualization of Winter SOI (lag1)
+###############################################################################
+ggplot(merged_data_complete, aes(x = longitude, y = latitude)) +
+  geom_point(aes(color = winter_soi_lag1), size = 3) +
+  scale_color_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0) +
+  labs(title = "Geographical Distribution of Winter SOI (lag1)",
+       x = "Longitude", y = "Latitude",
+       color = "Winter SOI (lag1)") +
+  theme_minimal()
+
+###############################################################################
+# Fit a GAMM to Explore Nonlinear Effects
+###############################################################################
+gamm_model <- gamm(
+  growth_rate ~ s(winter_soi_lag1),
+  random = list(site = ~1),
+  correlation = corAR1(form = ~ year | site),
   data = merged_data,
   na.action = na.omit
 )
-
-summary(model_lme)
-
+summary(gamm_model$gam)
+plot(gamm_model$gam, pages = 1)
 
 ###############################################################################
-# 6. Mixed-Effects Model with Random Slopes
+# Compare Random-Intercept vs. Random-Slope Models
 ###############################################################################
-# If we suspect each site might respond differently to winter_soi_lag1, let slope vary by site.
-# This is more flexible, but requires enough data per site to estimate slopes stably.
-
-model_lme_slopes <- lme(
+# 1) Random-intercept-only model
+model_random_intercept <- lme(
   fixed = growth_rate ~ winter_soi_lag1,
-  random = ~ winter_soi_lag1 | site,
+  random = ~ 1 | site,
   correlation = corAR1(form = ~ year | site),
   data = merged_data,
   na.action = na.omit,
-  control = lmeControl(
-    opt = "optim",        # or "nlminb", or "optimx" (if installed)
-    msMaxIter = 200,      # more iterations for the final step
-    msVerbose = TRUE      # print progress
-  )
+  control = lmeControl(opt = "optim", msMaxIter = 500)
+)
+summary(model_random_intercept)
+cat("Random-Intercept Model AIC:", AIC(model_random_intercept), "\n")
+
+# 2) Compare via likelihood ratio test
+anova_results <- anova(model_random_intercept, model_lme_slopes)
+print(anova_results)
+
+
+###############################################################################
+# Visualize
+###############################################################################
+
+
+# Extract the fitted values and residuals from the final model
+fitted_vals <- fitted(model_random_intercept)
+resids      <- residuals(model_random_intercept)
+
+# Reconstruct the "observed" values the model used
+observed_vals <- fitted_vals + resids
+
+# Put them in a dataframe with the same number of rows as the model
+df_plot <- data.frame(
+  observed = observed_vals,
+  fitted   = fitted_vals
 )
 
-summary(model_lme_slopes)
-
-
-###############################################################################
-# 7. Aggregated "Mean or Median" Growth Rate Approach
-###############################################################################
-# Some might want to see how the entire region's growth rate (mean or median) by year
-# correlates with lagged SOI.
-
-annual_growth <- merged_data %>%
-  group_by(year) %>%
-  summarise(
-    mean_growth   = mean(growth_rate, na.rm = TRUE),
-    median_growth = median(growth_rate, na.rm = TRUE),
-    .groups = "drop"
-  )
-
-# Merge that with the lagged winter SOI
-annual_merged <- annual_growth %>%
-  left_join(winter_soi_lags, by = c("year" = "Year"))
-
-head(annual_merged)
-
-# Simple correlation or linear model example
-cor.test(annual_merged$mean_growth, annual_merged$winter_soi_lag1, use="complete.obs")
-
-lm_mean <- lm(mean_growth ~ winter_soi_lag1, data = annual_merged)
-summary(lm_mean)
-
-# If you want to handle autocorrelation at the annual time scale, do a GLS with AR(1):
-gls_mean <- gls(
-  mean_growth ~ winter_soi_lag1,
-  correlation = corAR1(form = ~ year),
-  data = annual_merged,
-  na.action = na.omit
-)
-summary(gls_mean)
-
-
-###############################################################################
-# 8. Quick Visualization of Correlations with Multiple Lags
-###############################################################################
-# We'll compute correlation of each winter_soi_lagX with mean_growth.
-
-results_list <- list()
-for (lag_i in 1:max_lag) {
-  colname <- paste0("winter_soi_lag", lag_i)
-  tmp <- annual_merged %>%
-    filter(!is.na(.data[[colname]]), !is.na(mean_growth))
-  
-  ctest <- cor.test(tmp[[colname]], tmp$mean_growth)
-  results_list[[lag_i]] <- data.frame(
-    lag    = lag_i,
-    cor_est = ctest$estimate,
-    p_val   = ctest$p.value
-  )
-}
-
-corr_df <- do.call(rbind, results_list)
-corr_df
-
-ggplot(corr_df, aes(x = factor(lag), y = cor_est)) +
-  geom_bar(stat="identity", fill="skyblue") +
-  geom_text(aes(label = round(cor_est, 2)), vjust = -1.2) +
+library(ggplot2)
+ggplot(df_plot, aes(x = fitted, y = observed)) +
+  geom_point(alpha = 0.3) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
   labs(
-    title = "Correlation of Mean Growth vs. Lagged Winter SOI",
-    x = "Lag (Years)",
-    y = "Pearson Correlation"
+    title = "Observed vs. Fitted Growth Rates",
+    x = "Fitted",
+    y = "Observed"
   ) +
   theme_minimal()
+
+
+# Convert fitted and residuals to data frame, preserving row names
+fitted_df <- data.frame(fitted = fitted_vals, resids = resids)
+fitted_df$observed <- fitted_df$fitted + fitted_df$resids
+fitted_df$row_id   <- row.names(fitted_df)
+
+# Convert your original 'merged_data' to have row names that match
+# (This requires that merged_data was used directly by the model without reordering.)
+model_data <- merged_data
+row.names(model_data) <- as.character(seq_len(nrow(model_data)))
+
+# Join them by row names
+plot_df <- merge(model_data, fitted_df, by.x = "row.names", by.y = "row_id")
+
+# Now you can plot 'observed' vs. 'fitted', colored by site or year, etc.
+ggplot(plot_df, aes(x = fitted, y = observed, color = as.factor(site))) +
+  geom_point(alpha = 0.5) +
+  theme_minimal()
+
+
+###############################################################################
+# Caterpillar Plots for Random Intercepts
+###############################################################################
+
+
+# Extract random intercepts
+ranef_int <- ranef(model_random_intercept)
+ranef_df <- data.frame(site = rownames(ranef_int),
+                       intercept = ranef_int[[1]])
+
+# Order by intercept estimate
+ranef_df <- ranef_df %>%
+  arrange(intercept) %>%
+  mutate(order = row_number())
+
+ggplot(ranef_df, aes(x = intercept, y = reorder(site, intercept))) +
+  geom_point() +
+  geom_vline(xintercept = 0, linetype="dashed", color="grey50") +
+  labs(title="Caterpillar Plot: Random Intercepts by Colony",
+       x="Random Intercept Estimate", y="Colony") +
+  theme_minimal()
+
+
+final_fixef <- as.data.frame(summary(model_random_intercept)$tTable)
+# Then you can convert it into a nicely formatted table
+library(knitr)
+kable(final_fixef, digits = 4,
+      caption = "Fixed Effects for the Final Random-Intercept Model")
+
 
 ###############################################################################
 # End of Script
