@@ -1242,6 +1242,8 @@ run_gls_analysis <- function(penguin_abundance_data, ice_data, metrics, results_
   saveRDS(significant_gls_results_indiv, file.path(results_dir, "gls_analysis_results_indiv.rds"))
 }
 
+
+
 # Example Usage for a Small Subset
 
 # Load Gentoo penguin data
