@@ -20,7 +20,6 @@ library(lubridate)
 
 **Calculate Sea Ice Extent, Concentration and variability dataframes**
 
-
 This script calculates daily sea ice concentration (SIC), ice extent, and SIC variability from a raster stack of sea ice data for each day, and stores these metrics in a primary dataframe. It then filters the data for winter months (June-September) and calculates monthly variability metrics (standard deviation) for SIC and ice extent, which are stored in a separate dataframe. The script outputs both daily and monthly metrics to CSV and RDS files for further analysis. This allows for detailed daily and summarized monthly analysis of sea ice conditions within the study area.
 
 
@@ -132,9 +131,7 @@ saveRDS(monthly_variability_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets
 
 ```
 
-
 **Calculate Sea Ice Mean Monthly Persistence and Duration and Concentration Dataframes**
-
 
 *Persistence*: Measures the number of days within a month where SIC is above the threshold. This is useful to understand how often sea ice conditions are favorable within the specified months.
 
@@ -146,7 +143,7 @@ saveRDS(monthly_variability_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets
 
 
 
-```{r}
+```{r Calculate Monthly Persistence and Duration Metrics}
 # Load required libraries
 library(terra)
 library(dplyr)
@@ -314,10 +311,6 @@ saveRDS(cleaned_metrics, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/datase
 
 
 
-
-
-
-
 **Changepoint Analysis**
 
 Penalty Options
@@ -352,7 +345,7 @@ Depending on your data and the goals of your analysis, you can adjust the penalt
     For large datasets where computational efficiency is important, you might use method = "PELT".
     For smaller datasets where precision is critical, you might use method = "SegNeigh" with an appropriate value for Q.
 
-```{r}
+```{r Changepoint Analysis}
 
 # Install necessary packages if not already installed
 if (!require("changepoint")) install.packages("changepoint")
@@ -408,12 +401,11 @@ print(changepoints_annual_max_years)
 
 
 
-
 **Function to Run Analyses**
 
 This script loads a dataset of sea ice metrics, filters it for winter months (June - September), and calculates both monthly and annual averages of a specified variable for different regions. The script fits a generalized least squares (GLS) model to these averages to identify trends over time. To address the monthly vs. annual issue, it ensures that annual metrics are calculated by aggregating all daily values within the specified months by year and then averaging them, rather than averaging pre-calculated monthly means, thus avoiding potential biases. The results are saved to a CSV file with appropriate metadata.
 
-```{r}
+```{r GLS Analysis Function}
 # Load necessary libraries
 library(dplyr)
 library(lubridate)
@@ -590,12 +582,11 @@ result <- gls_analysis_function(
 ```
 
 
-
 **Adjusted Function**
 
 This accounts for missing day column in monthly datasets 
 
-```{r}
+```{r GLS Analysis Function}
 # Load necessary libraries
 library(dplyr)
 library(lubridate)
@@ -785,7 +776,7 @@ result <- gls_analysis_function(
 
 **Deploy the function**
 
-```{r}
+```{r Deploy the function}
 
 # IceExtent_km:
 result <- gls_analysis_function(
@@ -981,7 +972,7 @@ result <- gls_analysis_function(
 
 **Walk though output csvs and pull significant results**
 
-```{r}
+```{r Walk through csvs and pull significant results}
 # Load necessary libraries
 library(dplyr)
 
@@ -1029,9 +1020,9 @@ print(significant_results)
 
 
 
-**Walk through csvs and pull significant resutls - rename not working but most recent version**
+**Walk through csvs and pull significant results - rename not working but most recent version**
 
-```{r}
+```{r Walk through csvs and pull significant results - rename not working but most recent version}
 # Load necessary libraries
 library(dplyr)
 
@@ -1116,7 +1107,7 @@ print(renamed_results)
 
 **Southern Oscillation Index Analysis**
 
-```{r}
+```{r Southern Oscillation Index Analysis}
 # Load necessary libraries
 library(dplyr)
 library(lubridate)
@@ -1310,7 +1301,8 @@ Applying Linear Models
     Time Series Data:
         After calculating the yearly metrics for each cell, the script builds a time series for each cell. This time series spans from start_year to end_year.
 
-<<<<<<< Updated upstream
+```{r}
+
 # Apply the model for each unique region and month combination and store the results
 regions <- unique(monthly_averages$Region)
 months <- unique(monthly_averages$Month)
@@ -1427,7 +1419,7 @@ gls_summary_df
 
 **Analysis - Variability of Mean Monthly Sea Ice Concentration **
 
-```{r}
+```{r Analysis - Variability of Mean Monthly Sea Ice Concentration }
 # Load necessary libraries
 library(dplyr)
 library(lubridate)
@@ -1583,7 +1575,7 @@ gls_summary_df
 **Analysis - Monthy/Annual Persistence**
 
 
-```{r}
+```{r Analysis - Monthy/Annual Persistence}
 
 # Load necessary libraries
 library(dplyr)
@@ -1737,7 +1729,7 @@ gls_summary_df
 
 **Analysis - Monthly/Annual Persistence Varaibility **
 
-```{r}
+```{r Analysis - Monthly/Annual Persistence Varaibility }
 # Load necessary libraries
 library(dplyr)
 library(lubridate)
@@ -1892,7 +1884,7 @@ gls_summary_df
 
 **Analaysis - Mean Monthly Duration**
 
-```{r}
+```{r Analysis - Mean Monthly Duration}
 
 # Load necessary libraries
 library(dplyr)
@@ -2046,7 +2038,7 @@ gls_summary_df
 
 **Analysis - Variability of Mean Monthly Duration**
 
-```{r}
+```{r Analysis - Variability of Mean Monthly Duration}
 
 # Load necessary libraries
 library(dplyr)
@@ -2207,7 +2199,6 @@ gls_summary_df
 
 **Raster Visualization Duration + Persistence + SD  Analysis**
 
-
 ```{r}
 # Load necessary libraries
 library(dplyr)
@@ -2343,7 +2334,7 @@ print(head(gls_summary_df))
 
 **Southern Oscillation Index Analysis**
 
-```{r}
+```{r Analysis - Southern Oscillation Index}
 # Load necessary libraries
 library(dplyr)
 library(lubridate)
@@ -2456,7 +2447,7 @@ ggplot(correlation_results, aes(x = factor(Month, levels = 6:9), y = correlation
 
 
 **Visualize Seasonal Sea Ice Trends - Direction + Strength
-```{r}
+```{r Visualize Seasonal Sea Ice Trends - Direction + Strength}
 # Load necessary libraries
 library(ggplot2)
 library(RColorBrewer)
@@ -2529,8 +2520,7 @@ Applying Linear Models
     Time Series Data:
         After calculating the yearly metrics for each cell, the script builds a time series for each cell. This time series spans from start_year to end_year.
 
-=======
->>>>>>> Stashed changes
+
     Linear Model Fitting:
         For each cell, the script fits a linear model (lm) to the time series of yearly metric values.
         The response variable (y) is the metric value for each year.
@@ -2538,7 +2528,7 @@ Applying Linear Models
         
         
 
-```{r}
+```{r }
 # Load necessary libraries
 library(terra)
 library(dplyr)
@@ -2883,18 +2873,24 @@ analyze_sea_ice(start_year = 1981, end_year = 2023, use_mask = FALSE, report_met
 ```
 
 
+
+
 **Trend Visualization - Heatmap**
 
+```{r Trend Visualization - Heatmap}
+#!/usr/bin/env Rscript
+#Note: Output this as a PDF file using cairo + portrait mode
+#!/usr/bin/env Rscript
 
-```{r}
-# Load necessary libraries
+library(dplyr)
 library(ggplot2)
-library(scales)  # For rescale function
+library(scales)
+library(readr)
 
-# Load the data
-data <- read.csv("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/trend-analysis/Trends/significant_results_with_CIs.csv")
+# Load the data using the new file path
+data <- read_csv("C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/MEPS_Intial Manuscript Submission/Revision/Tables/Sea-Ice-Trends-Significant-Results.csv")
 
-# Ensure that relevant columns are not missing
+# Remove missing rows
 data <- na.omit(data)
 
 # Ensure the Metric and Region columns are correctly ordered and labeled
@@ -2902,14 +2898,12 @@ data$Metric <- factor(data$Metric, levels = c("Extent", "Extent (Var.)",
                                               "SIC", "SIC (Var.)", 
                                               "Duration", "Duration (Var.)", 
                                               "Open Water Frequency", "Open Water Frequency (Var.)"))
+data$Region <- factor(data$Region, levels = c("Complete Study Area", "Offshore", 
+                                              "Northern Shelf", "Middle Shelf", "Southern Shelf"))
 
-data$Region <- factor(data$Region, levels = c("Complete Study Area", "Offshore", "Northern Shelf", "Middle Shelf", "Southern Shelf"))
-
-# Replace "Annual" with "Winter" in the Month column
+# Replace "Annual" with "Winter" in the Month column, then relabel
 data$Month <- as.character(data$Month)
 data$Month[data$Month == "Annual"] <- "Winter"
-
-# Convert the Month column to a factor with custom labels
 month_labels <- c("6" = "June", "7" = "July", "8" = "August", "9" = "September", "Winter" = "Winter")
 data$Month <- factor(data$Month, levels = names(month_labels), labels = month_labels)
 
@@ -2917,41 +2911,53 @@ data$Month <- factor(data$Month, levels = names(month_labels), labels = month_la
 relative_scale <- function(x) {
   min_x <- min(x)
   max_x <- max(x)
-  
-  # If all values are the same, return them as is
   if (min_x == max_x) {
     return(rep(0, length(x)))
   } else {
-    scaled_x <- rescale(abs(x), to = c(0, 1))  # Scale absolute values between 0 and 1
-    return(scaled_x * sign(x))  # Reapply the sign to the scaled values
+    scaled_x <- rescale(abs(x), to = c(0, 1))
+    return(scaled_x * sign(x))
   }
 }
 
-# Apply the relative scaling function to each Metric
-data$Relative_Scaled_Slope <- ave(data$Time_Estimate, data$Metric, FUN = relative_scale)
+# Apply the relative scaling function (using the correct column name "Time.Estimate")
+data$Relative_Scaled_Slope <- ave(data$`Time Estimate`, data$Metric, FUN = relative_scale)
 
-# Check the summary of the relative scaled values
-cat("\nSummary of Relative Scaled Slope:\n")
-print(summary(data$Relative_Scaled_Slope))
+# Create a significance indicator (p <= 0.05)
+data <- data %>% mutate(Significant = (`p-Value` <= 0.05))
 
-# Inspect SIC-specific data to ensure it's correctly scaled
-cat("\nSIC-specific Data Inspection:\n")
-sic_data <- subset(data, Metric == "SIC")
-print(sic_data[, c("Time_Estimate", "Relative_Scaled_Slope")])
+# Filter rows: include those with significance or with a nonzero trend when rounded
+data_filtered <- data %>% filter(Significant | abs(round(Relative_Scaled_Slope, 2)) > 0)
+data_filtered <- data_filtered %>% filter(Relative_Scaled_Slope != 0)
 
-# Create the heatmap with the relative scaled slopes and the custom color palette
-ggplot(data, aes(x = Month, y = Region, fill = Relative_Scaled_Slope)) +
+# Create a label that displays only the direction:
+data_filtered <- data_filtered %>% 
+  mutate(label = ifelse(Relative_Scaled_Slope > 0, "+", ifelse(Relative_Scaled_Slope < 0, "–", "")))
+
+# Create the heatmap using the filtered data.
+heatmap_plot <- ggplot(data_filtered, aes(x = Month, y = Region, fill = Relative_Scaled_Slope)) +
   geom_tile(color = "white") +
+  # Overlay black borders around all significant cells
+  geom_tile(data = filter(data_filtered, Significant), fill = NA, color = "black", size = 0.2) +
+  # Overlay text labels indicating trend direction
+  geom_text(aes(label = label), size = 3, color = "black") +
   scale_fill_gradientn(colors = c("#E46726", "white", "#6D9EC1"), 
                        name = "Trend Strength & Direction",
-                       limits = c(-1, 1),  # Ensure color mapping from -1 to 1
-                       oob = scales::squish) +
-  labs(title = "Seasonal Trend Directions and Strength by Region", fill = "Relative Scaled Slope") +
-  theme_minimal() +
+                       limits = c(-1, 1),
+                       oob = squish) +
+  labs(title = "Seasonal Trend Directions and Strength by Region",
+       fill = "Relative Scaled Slope") +
+  theme_minimal(base_size = 13) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1),
-        panel.spacing = unit(2, "lines")) +
+        panel.spacing = unit(2, "lines"),
+        plot.margin = margin(10, 10, 10, 10)) +
   facet_wrap(~ Metric, ncol = 2) +
-  coord_fixed(ratio = 1)  # Set aspect ratio to make tiles more square
+  coord_fixed(ratio = 1, clip = "off")  # Prevent clipping of text that extends into margins
+
+# Display the heatmap
+print(heatmap_plot)
+
+# Save the plot to PDF using the cairo_pdf device for better rendering of text
+ggsave(filename = "heatmap_plot.pdf", plot = heatmap_plot, width = 10, height = 8, device = cairo_pdf)
 
 
 ```
