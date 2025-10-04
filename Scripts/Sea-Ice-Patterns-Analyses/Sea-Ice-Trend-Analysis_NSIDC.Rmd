@@ -1105,9 +1105,9 @@ print(renamed_results)
 
 
 
-**Southern Oscillation Index Analysis**
+**Southern Oscillation Index Analysis with sea ice trends**
 
-```{r Southern Oscillation Index Analysis}
+```{r Southern Oscillation Index Analysis with Sea Ice Trends}
 # Load necessary libraries
 library(dplyr)
 library(lubridate)
