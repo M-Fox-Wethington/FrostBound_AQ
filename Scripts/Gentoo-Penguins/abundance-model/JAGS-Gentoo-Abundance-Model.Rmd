@@ -202,7 +202,7 @@ model_data <- list(
 
 ```
 
-**JAGS Model**
+**DEFINE AND RUN JAGS Model**
 ```{r}
 
 # Install and load necessary libraries
@@ -622,7 +622,7 @@ print(head(final_data))
 ```
 
 
-**calculate and plot geometric mean of growth rates** 
+**CALCULATE GROWTH RATES:  and plot geometric mean of growth rates** 
 ```{r}
 library(ggplot2)
 library(dplyr)
@@ -675,7 +675,7 @@ ggplot(site_data, aes(x = year, y = mean_abundance)) +
 ```
 
 
-**Calculate Sea Ice concentration and pass to dataframe**
+**CALCULATE METRICS: Sea Ice concentration within home range and pass to dataframe**
 
 ```{r}
 
@@ -777,7 +777,9 @@ head(all_results_df)
 
 ```
 
-**Calculate Persistence and Duration metrics and pass to dataframe**
+
+
+**CALCULATE METRICS: Persistence (Open Water Frequency) and Duration metrics and pass to dataframe**
 ```{r}
 
 # Load necessary libraries
@@ -914,7 +916,7 @@ head(all_duration_persistence_stats)
 ```
 
 
-**Run GLS Models on lagged year for Sea ice concentration**
+**RUN MODELS: GLS Models on lagged year for SEA ICE CONCENTRATION**
 
 ```{r}
 # Load necessary libraries
@@ -1114,7 +1116,9 @@ results_output <- run_gls_analysis(penguin_abundance_data, ice_data, metrics, re
 
 ```
 
-**Run GLS Models on lagged year for Persistence and Duration**
+
+
+**RUN MODELS: Run GLS Models on lagged year for PERSISTENCE (OPEN WATER FREQUENCY) and DURATION**
 ```{r}
 # Load necessary libraries
 library(terra)
@@ -1243,8 +1247,6 @@ run_gls_analysis <- function(penguin_abundance_data, ice_data, metrics, results_
 
 
 
-# Example Usage for a Small Subset
-
 # Load Gentoo penguin data
 penguin_abundance_data <- fread("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
 
@@ -1311,7 +1313,7 @@ cat("Merged CSV file saved to:", merged_file_path, "\n")
 
 
 
-**Compile and organize Significant Results**
+**COMPILE BONFERRONI ADJUSTED SIGNFICANT RESULTS**
 ```{r}
 # Load necessary libraries
 library(data.table)
@@ -1378,7 +1380,7 @@ lapply(names(split_data), function(metric) {
 ```
 
 
-**Plot SIC and Concentration Results for Single model**
+**VISUALIZE AND PLOT: SEA ICE CONCENTRATION Results for Single model**
 ```{r}
 # Load necessary libraries
 library(nlme)
@@ -1569,8 +1571,7 @@ ggsave("growth_rate_effects_sic_extent.png", plot = final_plot, bg = bg, height 
 
 
 
-**Plot Forest Plots - Concentration/Extent**
-
+**PLOT FOREST PLOTS: Forest plots for SEA ICE CONCENTRATION AND SEA ICE EXTENT**
 
 ```{r}
 # Load necessary libraries
@@ -1665,7 +1666,7 @@ dev.off()
 ```
 
 
-**Plot Persistence and Duration Forest Plots**
+**PLOT FOREST PLOTS: PERSISENCE (OPEN WATER FREQUENCY) and DURATION**
 
 ```{r}
 # Load necessary libraries
