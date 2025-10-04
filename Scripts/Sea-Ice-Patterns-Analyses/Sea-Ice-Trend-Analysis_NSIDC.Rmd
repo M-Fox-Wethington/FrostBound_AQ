@@ -1,7 +1,7 @@
 ---
 title: "Multidecadal Sea Ice Metrics Trend Analysis - Harmonized 12.5 km Sea Ice Index Dataset"
 author: "Michael Wethington"
-date: "2024-05-14"
+date: "Lastest Version: 2025-10-04"
 output: html_document
 ---
 
@@ -2490,7 +2490,7 @@ ggplot(data, aes(x = Month, y = Region, fill = Standardized_Slope)) +
 
 
 
-**Duration and Persistence + Trend analayis - Basic glm**
+**Duration and Open Water Freqeucy  + Trend analysis - Basic glm**
 
 
  
@@ -2501,10 +2501,10 @@ ggplot(data, aes(x = Month, y = Region, fill = Standardized_Slope)) +
         Each raster stack represents sea ice concentration for a specific year.
 
     Metric Calculation for Each Year:
-        For each year in the range start_year to end_year, the script calculates the specified metrics (persistence, duration, concentration) for each cell in the raster stack.
+        For each year in the range start_year to end_year, the script calculates the specified metrics (Open Water Freqeucy , duration, concentration) for each cell in the raster stack.
 
-    Persistence Calculation:
-        Persistence: The number of days per year where sea ice concentration is above a threshold (0.15).
+    Open Water Freqeucy Calculation:
+        Open Water Freqeucy: The number of days per year where sea ice concentration is above a threshold (0.15).
         This is calculated using a sum function over the raster stack for the year.
 
     Duration Calculation:
