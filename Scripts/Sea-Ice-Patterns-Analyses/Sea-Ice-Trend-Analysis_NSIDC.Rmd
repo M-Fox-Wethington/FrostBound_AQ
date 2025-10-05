@@ -18,9 +18,9 @@ library(lubridate)
 
 
 
-**Calculate Sea Ice Extent, Concentration and variability dataframes**
+**CALCULATE SEA ICE EXTENT, SEA ICE CONCENTRATION and VARIABILITY**
 
-This script calculates daily sea ice concentration (SIC), ice extent, and SIC variability from a raster stack of sea ice data for each day, and stores these metrics in a primary dataframe. It then filters the data for winter months (June-September) and calculates monthly variability metrics (standard deviation) for SIC and ice extent, which are stored in a separate dataframe. The script outputs both daily and monthly metrics to CSV and RDS files for further analysis. This allows for detailed daily and summarized monthly analysis of sea ice conditions within the study area.
+This script calculates daily SEA ICE CONCENTRATION (SIC), SEA ICE EXTENT, and SIC variability from a raster stack of sea ice data for each day, and stores these metrics in a primary dataframe. It then filters the data for winter months (June-September) and calculates monthly variability metrics (standard deviation) for SIC and ice extent, which are stored in a separate dataframe. The script outputs both daily and monthly metrics to CSV and RDS files for further analysis. This allows for detailed daily and summarized monthly analysis of sea ice conditions within the study area.
 
 
 Structure
@@ -131,7 +131,7 @@ saveRDS(monthly_variability_df, "D:/Manuscripts_localData/FrostBound_AQ/Datasets
 
 ```
 
-**Calculate Sea Ice Mean Monthly Persistence and Duration and Concentration Dataframes**
+**CALCULATE Sea Ice Mean Monthly PERSISTENCE (OPEN WATER FREQUENCY) and DURATION and SEA ICE CONCENTRATION**
 
 *Persistence*: Measures the number of days within a month where SIC is above the threshold. This is useful to understand how often sea ice conditions are favorable within the specified months.
 
@@ -308,7 +308,6 @@ saveRDS(cleaned_metrics, "D:/Manuscripts_localData/FrostBound_AQ/Datasets/datase
 
 
 ```
-
 
 
 **Changepoint Analysis**
