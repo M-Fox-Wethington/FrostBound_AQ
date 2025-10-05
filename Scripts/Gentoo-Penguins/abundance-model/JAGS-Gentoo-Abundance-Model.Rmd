@@ -202,6 +202,7 @@ model_data <- list(
 
 ```
 
+
 **DEFINE AND RUN JAGS Model**
 ```{r}
 
@@ -488,7 +489,7 @@ MCMCsummary(model_data_rinits_output, params = params, n.eff = FALSE, round = 3)
 
 
 
-**Generate Gentoo Growth Parameters**
+**EXTRACT Gentoo Growth Parameters**
 
 ```{r}
 
@@ -912,590 +913,127 @@ all_duration_persistence_stats <- read.csv(file.path(results_dir, "sea_ice_durat
 head(all_duration_persistence_stats)
 
 
-
-```
-
-
-**RUN MODELS: GLS Models on lagged year for SEA ICE CONCENTRATION**
-
-```{r}
-# Load necessary libraries
-library(terra)
-library(sf)
-library(dplyr)
-library(nlme)
-library(lubridate)
-library(data.table)
-
-# Function to calculate monthly average standard deviation for Extent
-calculate_monthly_sd <- function(ice_data) {
-  ice_data <- ice_data %>%
-    mutate(date = as.Date(date, format = "%Y-%m-%d"),
-           year_month = format(date, "%Y-%m")) %>%
-    group_by(year_month, Threshold, HomeRangeSize) %>%
-    summarize(Extent_SD = sd(ice_extent_km2, na.rm = TRUE), .groups = 'drop') %>%
-    mutate(date = as.Date(paste0(year_month, "-01"))) %>%
-    select(-year_month)
-  return(ice_data)
-}
-
-# Function to merge monthly Extent_SD with daily data
-merge_monthly_sd <- function(daily_data, monthly_sd_data) {
-  daily_data <- daily_data %>%
-    mutate(date = as.Date(date, format = "%Y-%m-%d"),
-           year_month = format(date, "%Y-%m")) %>%
-    left_join(monthly_sd_data, by = c("date", "Threshold", "HomeRangeSize")) %>%
-    select(-year_month)
-  return(daily_data)
-}
-
-# General function to compute annual ice metrics
-compute_annual_ice_metrics <- function(ice_data, metrics) {
-  ice_data <- ice_data %>%
-    mutate(date = as.Date(date, format = "%Y-%m-%d"),
-           year = year(date))
-  
-  annual_ice_metrics <- ice_data %>%
-    group_by(year, Threshold, HomeRangeSize) %>%
-    summarize(across(all_of(metrics), ~mean(.x, na.rm = TRUE), .names = "mean_{.col}"),
-              across(all_of(metrics), ~sd(.x, na.rm = TRUE), .names = "sd_{.col}"),
-              .groups = 'drop')
-  
-  return(annual_ice_metrics)
-}
-
-# Function to get individual precomputed ice metrics
-get_individual_ice_metrics <- function(year, ice_data, metric) {
-  ice_value <- ice_data %>%
-    filter(year == !!year) %>%
-    pull(!!sym(metric))
-  
-  if (length(ice_value) > 0) {
-    return(ice_value)
-  } else {
-    return(NA)
-  }
-}
-
-# Function to fit GLS models for individual lag years
-fit_gls_models_indiv <- function(penguin_data, ice_data, metric, threshold, home_range_size) {
-  results <- list()
-  
-  for (lag in 1:5) {
-    penguin_data <- penguin_data %>%
-      rowwise() %>%
-      mutate(overwinter_ice = get_individual_ice_metrics(year - lag, ice_data, metric)) %>%
-      ungroup() %>%
-      filter(!is.na(overwinter_ice) & !is.na(growth_rate) & growth_rate <= 3)
-    
-    if (nrow(penguin_data) < 3) next
-    
-    print(paste("Fitting GLS model for individual lag", lag, "year(s)"))
-    formula <- as.formula("growth_rate ~ overwinter_ice")
-    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_data)
-    summary_model <- summary(model)
-    bonferroni_p_value <- p.adjust(summary_model$tTable[2, 4], method = "bonferroni", n = 5)
-    
-    if (bonferroni_p_value < 0.05) {
-      results[[paste("Lag_Indiv", lag)]] <- list(
-        AIC = AIC(model),
-        BIC = BIC(model),
-        coefficients = summary_model$tTable,
-        p_value = summary_model$tTable[2, 4],
-        bonferroni_p_value = bonferroni_p_value,
-        model = model,
-        penguin_data = penguin_data
-      )
-    }
-  }
-  
-  return(results)
-}
-
-# Main function to run GLS analysis for each condition and save results
-run_gls_analysis <- function(penguin_abundance_data, ice_data, metrics, results_dir) {
-  # Initialize results list
-  all_gls_results_indiv <- list()
-  all_results_df_indiv <- list()
-  significant_results_df_indiv <- list()
-  
-  # Compute monthly average standard deviation
-  monthly_sd_data <- calculate_monthly_sd(ice_data)
-  
-  # Merge monthly SD data with daily data
-  ice_data <- merge_monthly_sd(ice_data, monthly_sd_data)
-  
-  # Compute annual ice metrics
-  annual_ice_metrics <- compute_annual_ice_metrics(ice_data, metrics)
-  
-  # List unique thresholds and home range sizes
-  thresholds <- unique(annual_ice_metrics$Threshold)
-  home_range_sizes <- unique(annual_ice_metrics$HomeRangeSize)
-  
-  for (metric in metrics) {
-    for (threshold in thresholds) {
-      for (home_range_size in home_range_sizes) {
-        ice_subset <- annual_ice_metrics %>%
-          filter(Threshold == threshold, HomeRangeSize == home_range_size)
-        
-        print(paste("Running GLS analysis for metric:", metric, "threshold:", threshold, "home range size:", home_range_size))
-        
-        # Perform GLS analysis for individual lag years
-        gls_results_indiv <- fit_gls_models_indiv(penguin_abundance_data, ice_subset, paste("mean_", metric, sep = ""), threshold, home_range_size)
-        
-        # Store results for individual lag years
-        all_gls_results_indiv[[paste("Annual_Indiv", metric, threshold, home_range_size, sep = "_")]] <- gls_results_indiv
-        
-        results_list_indiv <- lapply(names(gls_results_indiv), function(lag) {
-          result <- gls_results_indiv[[lag]]
-          data.frame(
-            Metric = metric,
-            HomeRangeSize = home_range_size,
-            Threshold = threshold,
-            Lag = lag,
-            AIC = result$AIC,
-            BIC = result$BIC,
-            Coefficient_Intercept = result$coefficients[1, 1],
-            StdError_Intercept = result$coefficients[1, 2],
-            tValue_Intercept = result$coefficients[1, 3],
-            pValue_Intercept = result$coefficients[1, 4],
-            Coefficient = result$coefficients[2, 1],
-            StdError = result$coefficients[2, 2],
-            tValue = result$coefficients[2, 3],
-            pValue = result$coefficients[2, 4],
-            Bonferroni_Adjusted_pValue = result$bonferroni_p_value
-          )
-        })
-        
-        all_results_df_indiv <- append(all_results_df_indiv, results_list_indiv)
-        significant_results_df_indiv <- append(significant_results_df_indiv, Filter(function(x) x$Bonferroni_Adjusted_pValue < 0.05, results_list_indiv))
-      }
-    }
-  }
-  
-  # Export the compiled results to CSV
-  all_results_df_indiv <- do.call(rbind, all_results_df_indiv)
-  significant_results_df_indiv <- do.call(rbind, significant_results_df_indiv)
-  
-  write.csv(all_results_df_indiv, file.path(results_dir, "model_results_indiv_ice_metrics_extent_extentsd.csv"), row.names = FALSE)
-  write.csv(significant_results_df_indiv, file.path(results_dir, "significant_model_results_indiv_ice_metrics_extent_extentsd.csv"), row.names = FALSE)
-  
-  # Save only significant results to RDS
-  significant_gls_results_indiv <- list()
-  for (metric in names(all_gls_results_indiv)) {
-    significant_gls_results_indiv[[metric]] <- Filter(Negate(is.null), all_gls_results_indiv[[metric]])
-  }
-  saveRDS(significant_gls_results_indiv, file.path(results_dir, "gls_analysis_results_indiv_concentration_extent_extentsd.rds"))
-}
-
-### Load Data and Run Analysis
-
-# Load Gentoo penguin data
-penguin_abundance_data <- fread("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
-
-str(penguin_abundance_data)
-
-# Adjust the season column in the penguin abundance data
-penguin_abundance_data <- penguin_abundance_data %>%
-  mutate(year = 1970 + season - 1)
-
-# Load the SIC statistics
-metric_calculation_csv <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/metric-calculation-csv"
-ice_data <- fread(file.path(metric_calculation_csv, "daily_sic_statistics.csv"))
-str(ice_data)
-
-# Define the metrics to analyze
-metrics <- c("mean_sic", "sd_sic", "ice_extent_km2", "Extent_SD")
-
-# Define the results directory
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
-dir.create(results_dir, showWarnings = FALSE)
-
-# Run the GLS analysis on the full dataset
-results_output <- run_gls_analysis(penguin_abundance_data, ice_data, metrics, results_dir)
-
 ```
 
 
 
-**RUN MODELS: Run GLS Models on lagged year for PERSISTENCE (OPEN WATER FREQUENCY) and DURATION**
+
+**Run & Visualize: GLS Regional Analysis**
+
 ```{r}
-# Load necessary libraries
-library(terra)
-library(sf)
-library(dplyr)
-library(nlme)
-library(lubridate)
-library(data.table)
+# ============================================================================
+# Regional GLS Analysis for Gentoo Penguin Growth Rates vs Sea Ice Metrics
+# Performs SEPARATE analyses for Bransfield and Central WAP regions
+# Includes: SIC, Extent, Duration, and Persistence (Open Water Frequency)
+# ============================================================================
 
-# Function to get individual precomputed ice metrics
-get_individual_ice_metrics <- function(year, ice_data, metric) {
-  ice_values <- ice_data %>%
-    filter(year == !!year) %>%
-    pull(!!sym(metric))
-  
-  if (length(ice_values) > 0) {
-    return(mean(ice_values, na.rm = TRUE))
-  } else {
-    return(NA)
-  }
-}
-
-# Function: Fit GLS models for individual lag years
-fit_gls_models_indiv <- function(penguin_data, ice_data, metric) {
-  results <- list()
-  
-  for (lag in 1:5) {
-    penguin_data <- penguin_data %>%
-      rowwise() %>%
-      mutate(overwinter_ice = get_individual_ice_metrics(year - lag, ice_data, metric)) %>%
-      ungroup() %>%
-      filter(!is.na(overwinter_ice))
-    
-    if (nrow(penguin_data) < 3) next
-    
-    print(paste("Fitting GLS model for individual lag", lag, "year(s)"))
-    formula <- as.formula("growth_rate ~ overwinter_ice")
-    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_data)
-    summary_model <- summary(model)
-    bonferroni_p_value <- p.adjust(summary_model$tTable[2, 4], method = "bonferroni", n = 5)
-    
-    if (bonferroni_p_value < 0.05) {
-      results[[paste("Lag_Indiv", lag)]] <- list(
-        AIC = AIC(model),
-        BIC = BIC(model),
-        coefficients = summary_model$tTable,
-        p_value = summary_model$tTable[2, 4],
-        bonferroni_p_value = bonferroni_p_value,
-        model = model,
-        penguin_data = penguin_data
-      )
-    }
-  }
-  
-  return(results)
-}
-
-# Main function to run GLS analysis for each condition and save results
-run_gls_analysis <- function(penguin_abundance_data, ice_data, metrics, results_dir) {
-  # Initialize results list
-  all_gls_results_indiv <- list()
-  all_results_df_indiv <- list()
-  significant_results_df_indiv <- list()
-  
-  # List unique thresholds and home range sizes
-  thresholds <- unique(ice_data$Threshold)
-  home_range_sizes <- unique(ice_data$HomeRangeSize)
-  
-  for (metric in metrics) {
-    for (threshold in thresholds) {
-      for (home_range_size in home_range_sizes) {
-        ice_subset <- ice_data %>%
-          filter(Threshold == threshold, HomeRangeSize == home_range_size)
-        
-        print(paste("Running GLS analysis for metric:", metric, "threshold:", threshold, "home range size:", home_range_size))
-        
-        # Perform GLS analysis for individual lag years
-        gls_results_indiv <- fit_gls_models_indiv(penguin_abundance_data, ice_subset, metric)
-        
-        # Store results for individual lag years
-        all_gls_results_indiv[[paste("Annual_Indiv", metric, threshold, home_range_size, sep = "_")]] <- gls_results_indiv
-        
-        results_list_indiv <- lapply(names(gls_results_indiv), function(lag) {
-          result <- gls_results_indiv[[lag]]
-          data.frame(
-            Metric = metric,
-            HomeRangeSize = home_range_size,
-            Threshold = threshold,
-            Lag = lag,
-            AIC = result$AIC,
-            BIC = result$BIC,
-            Coefficient_Intercept = result$coefficients[1, 1],
-            StdError_Intercept = result$coefficients[1, 2],
-            tValue_Intercept = result$coefficients[1, 3],
-            pValue_Intercept = result$coefficients[1, 4],
-            Coefficient = result$coefficients[2, 1],
-            StdError = result$coefficients[2, 2],
-            tValue = result$coefficients[2, 3],
-            pValue = result$coefficients[2, 4],
-            Bonferroni_Adjusted_pValue = result$bonferroni_p_value
-          )
-        })
-        
-        all_results_df_indiv <- append(all_results_df_indiv, results_list_indiv)
-        significant_results_df_indiv <- append(significant_results_df_indiv, Filter(function(x) x$Bonferroni_Adjusted_pValue < 0.05, results_list_indiv))
-      }
-    }
-  }
-  
-  # Export the compiled results to CSV
-  for (metric in metrics) {
-    metric_results_df_indiv <- do.call(rbind, lapply(all_results_df_indiv, function(x) if (x$Metric == metric) x else NULL))
-    metric_significant_results_df_indiv <- do.call(rbind, lapply(significant_results_df_indiv, function(x) if (x$Metric == metric) x else NULL))
-    
-    write.csv(metric_results_df_indiv, file.path(results_dir, paste0("model_results_indiv_", metric, ".csv")), row.names = FALSE)
-    write.csv(metric_significant_results_df_indiv, file.path(results_dir, paste0("significant_model_results_indiv_", metric, ".csv")), row.names = FALSE)
-  }
-  
-  # Save only significant results to RDS
-  significant_gls_results_indiv <- list()
-  for (metric in names(all_gls_results_indiv)) {
-    significant_gls_results_indiv[[metric]] <- Filter(Negate(is.null), all_gls_results_indiv[[metric]])
-  }
-  saveRDS(significant_gls_results_indiv, file.path(results_dir, "gls_analysis_results_indiv.rds"))
-}
-
-
-
-# Load Gentoo penguin data
-penguin_abundance_data <- fread("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
-
-# Adjust the season column in the penguin abundance data
-penguin_abundance_data <- penguin_abundance_data %>%
-  mutate(year = 1970 + season - 1)
-
-# Load the SIC statistics
-metric_calculation_csv <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/metric-calculation-csv"
-ice_data <- fread(file.path(metric_calculation_csv, "sea_ice_duration_persistence_stats.csv"))
-
-# Define the metrics to analyze
-metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence")
-
-# Define the results directory
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
-dir.create(results_dir, showWarnings = FALSE)
-
-run_gls_analysis(penguin_abundance_data, ice_data, metrics, results_dir)
-
-
-
-
-# Load necessary libraries
-library(dplyr)
-library(readr)
-
-# Define the directory containing the significant CSV files
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
-
-# Define the metrics to analyze
-metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence")
-
-# Initialize an empty list to store the data frames
-all_significant_results <- list()
-
-# Loop through each metric and read the corresponding CSV file
-for (metric in metrics) {
-  file_path <- file.path(results_dir, paste0("significant_model_results_indiv_", metric, ".csv"))
-  
-  # Check if the file exists
-  if (file.exists(file_path)) {
-    # Read the CSV file and add the metric as a new column
-    data <- read_csv(file_path) %>%
-      mutate(Metric_Type = metric)
-    all_significant_results[[metric]] <- data
-  } else {
-    cat("File does not exist:", file_path, "\n")
-  }
-}
-
-# Combine all data frames into a single data frame
-merged_significant_results <- bind_rows(all_significant_results)
-
-# Save the merged data frame to a new CSV file
-merged_file_path <- file.path(results_dir, "merged_significant_model_results_duration_persistence.csv")
-write_csv(merged_significant_results, merged_file_path)
-
-cat("Merged CSV file saved to:", merged_file_path, "\n")
-
-
-
-```
-
-
-
-**COMPILE BONFERRONI ADJUSTED SIGNFICANT RESULTS**
-```{r}
-# Load necessary libraries
-library(data.table)
-library(dplyr)
-
-# Define the directory paths
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
-significant_results_dir <- file.path(results_dir, "bonferroni_significant_results")
-
-# Create the new subdirectory if it doesn't exist
-dir.create(significant_results_dir, showWarnings = FALSE)
-
-# Function to clean HomeRangeSize column
-clean_home_range_size <- function(df) {
-  df %>%
-    mutate(HomeRangeSize = as.numeric(gsub("km", "", HomeRangeSize)))
-}
-
-# Function to create subsets of data based on Bonferroni significance criteria and Metric
-subset_significant_results <- function(file_path) {
-  # Load the data
-  data <- fread(file_path)
-  
-  # Clean the HomeRangeSize column
-  data <- clean_home_range_size(data)
-  
-  # Get unique metrics
-  metrics <- unique(data$Metric)
-  
-  # Initialize a list to store subsets
-  metric_data_list <- list()
-  
-  # Loop through each metric and create subset
-  for (metric in metrics) {
-    metric_data <- data %>%
-      filter(Metric == metric, Bonferroni_Adjusted_pValue < 0.05)
-    
-    if (nrow(metric_data) > 0) {
-      metric_data_list[[metric]] <- metric_data
-    }
-  }
-  
-  return(metric_data_list)
-}
-
-# Get a list of CSV files in the directory
-csv_files <- list.files(path = results_dir, pattern = "*.csv", full.names = TRUE)
-
-# Apply the function to each CSV file and bind the results by Metric
-all_significant_results <- lapply(csv_files, subset_significant_results)
-all_significant_results <- do.call(rbind, unlist(all_significant_results, recursive = FALSE))
-
-# Split the data by Metric and save to separate CSV files
-split_data <- split(all_significant_results, all_significant_results$Metric)
-
-# Save each subset to a separate CSV file
-lapply(names(split_data), function(metric) {
-  output_file_name <- paste0(metric, "_bonferroni_significant.csv")
-  output_file_path <- file.path(significant_results_dir, output_file_name)
-  write.csv(split_data[[metric]], output_file_path, row.names = FALSE)
-})
-
-
-```
-
-
-**VISUALIZE AND PLOT: SEA ICE CONCENTRATION Results for Single model**
-```{r}
-# Load necessary libraries
 library(nlme)
 library(data.table)
 library(dplyr)
 library(ggplot2)
-library(gridExtra)
+library(lubridate)
 library(showtext)
 library(patchwork)
 
-# Define file paths
-model_results_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results/model_results_indiv_ice_metrics.csv"
-
-daily_sic_statistics_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/metric-calculation-csv/daily_sic_statistics.csv"
-
-modeled_gentoo_parameters_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv"
-
-# Load the data files
-model_results_df <- fread(model_results_path)
-daily_sic_statistics_df <- fread(daily_sic_statistics_path)
-modeled_gentoo_parameters_df <- fread(modeled_gentoo_parameters_path)
-
-# Compute annual ice metrics
-compute_annual_ice_metrics <- function(ice_data, metrics) {
-  ice_data <- ice_data %>%
-    mutate(year = year(date))
-  
-  annual_ice_metrics <- ice_data %>%
-    group_by(year, Threshold, HomeRangeSize) %>%
-    summarize(across(all_of(metrics), ~mean(.x, na.rm = TRUE), .names = "mean_{.col}"),
-              across(all_of(metrics), ~sd(.x, na.rm = TRUE), .names = "sd_{.col}"),
-              .groups = 'drop')
-  
-  return(annual_ice_metrics)
-}
-
-# Define the metrics to analyze
-metrics <- c("mean_sic", "ice_extent_km2", "sd_sic")
-
-# Compute the annual ice metrics
-annual_ice_metrics <- compute_annual_ice_metrics(daily_sic_statistics_df, metrics)
-
-# Function to get precomputed ice metrics
-get_precomputed_ice_metrics <- function(year, ice_data, metric) {
-  ice_value <- ice_data %>%
-    filter(year == !!year) %>%
-    pull(!!sym(metric))
-  
-  if (length(ice_value) > 0) {
-    return(mean(ice_value, na.rm = TRUE))
-  } else {
-    return(NA)
-  }
-}
-
-# Calculate the average sea ice concentration, extent, sd_sic, and sd_extent from the prior year
-penguin_data_with_ice <- modeled_gentoo_parameters_df %>%
-  rowwise() %>%
-  mutate(overwinter_ice_1yr = get_precomputed_ice_metrics(year - 1, annual_ice_metrics, "mean_mean_sic"),
-         overwinter_extent_1yr = get_precomputed_ice_metrics(year - 1, annual_ice_metrics, "mean_ice_extent_km2"),
-         overwinter_sd_sic_1yr = get_precomputed_ice_metrics(year - 1, annual_ice_metrics, "mean_sd_sic"),
-         overwinter_sd_extent_1yr = get_precomputed_ice_metrics(year - 1, annual_ice_metrics, "sd_ice_extent_km2")) %>%
-  ungroup()
-
-# Filter out growth rates above 3
-filtered_penguin_data <- penguin_data_with_ice %>%
-  filter(growth_rate <= 3)
-
-# Function to fit GLS model for average metric from 1 year with filtered data
-fit_gls_model_avg <- function(penguin_data, metric) {
-  penguin_data <- penguin_data %>%
-    filter(!is.na(!!sym(metric)), !is.na(growth_rate))
-  
-  print(paste("Fitting GLS model for average lag 1 year for", metric))
-  formula <- as.formula(paste("growth_rate ~", metric))
-  model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_data)
-  
-  return(model)
-}
-
-# Fit the models for the new metrics
-gls_models <- list()
-metrics_list <- c("overwinter_ice_1yr", "overwinter_extent_1yr", "overwinter_sd_sic_1yr", "overwinter_sd_extent_1yr")
-
-for (metric in metrics_list) {
-  gls_models[[metric]] <- fit_gls_model_avg(filtered_penguin_data, metric)
-}
-
-# Get confidence intervals for the model coefficients
-conf_intervals <- lapply(gls_models, intervals)
-
-# Extract the confidence intervals for the intercept and slope
-conf_intervals_list <- lapply(conf_intervals, function(ci) {
-  list(
-    intercept_ci = ci$coef[1, ],
-    slope_ci = ci$coef[2, ]
-  )
+# Suppress showtext warnings
+suppressMessages({
+  font <- "Gudea"
+  font_add_google(family = font, font, db_cache = TRUE)
+  showtext_auto()
 })
 
-# Plot settings
-font <- "Gudea"
-font_add_google(family = font, font, db_cache = TRUE)
-showtext_auto()
-
 theme_set(theme_minimal(base_family = font, base_size = 12))
-bg <- "#F4F5F1"
-txt_col <- "black"
 
-# Function to create prediction data and plot
-create_plot <- function(penguin_data, gls_model, intercept_ci, slope_ci, metric, x_label, title) {
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+# Function: Define latitude column
+pick_lat_col <- function(df) {
+  cand <- c("lat", "latitude", "colony_lat", "site_lat", "lat_dd")
+  hit <- cand[cand %in% names(df)]
+  if (length(hit) == 0) return(NULL)
+  hit[1]
+}
+
+# Function: Safe year extraction from date strings
+safe_year_from_date <- function(x) {
+  x <- as.character(x)
+  y <- suppressWarnings(year(mdy(x)))
+  idx <- is.na(y)
+  if (any(idx)) y[idx] <- suppressWarnings(year(dmy(x[idx])))
+  idx <- is.na(y)
+  if (any(idx)) y[idx] <- suppressWarnings(year(ymd(x[idx])))
+  y
+}
+
+# Function: Aggregate metrics to yearly (handles both daily and monthly data)
+yearly_aggregate_metric <- function(df, metric_col) {
+  if ("date" %in% names(df)) {
+    # Daily data → aggregate to year
+    out <- df %>%
+      mutate(year = safe_year_from_date(date)) %>%
+      group_by(year) %>%
+      summarise(metric_value = mean(.data[[metric_col]], na.rm = TRUE), .groups = "drop")
+  } else if ("year" %in% names(df)) {
+    # Already aggregated (monthly/seasonal) → average to year
+    out <- df %>%
+      group_by(year) %>%
+      summarise(metric_value = mean(.data[[metric_col]], na.rm = TRUE), .groups = "drop")
+  } else {
+    stop("Input lacks both 'date' and 'year' columns; cannot aggregate.")
+  }
+  out
+}
+
+# Function: Fit GLS models for individual lag years (1-5)
+fit_gls_models_indiv <- function(penguin_data, metric_yearly, metric_name) {
+  results <- list()
+  
+  for (lag in 1:5) {
+    # Lag the metric data and merge with penguin data
+    metric_lagged <- metric_yearly %>%
+      mutate(year = year + lag)
+    
+    penguin_lagged <- penguin_data %>%
+      left_join(metric_lagged, by = "year") %>%
+      filter(!is.na(metric_value), !is.na(growth_rate), growth_rate <= 3)
+    
+    if (nrow(penguin_lagged) < 3) next
+    
+    cat(sprintf("    Fitting GLS model for lag %d year(s)\n", lag))
+    
+    formula <- as.formula("growth_rate ~ metric_value")
+    model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_lagged)
+    summary_model <- summary(model)
+    bonferroni_p_value <- p.adjust(summary_model$tTable[2, 4], method = "bonferroni", n = 5)
+    
+    if (bonferroni_p_value < 0.05) {
+      results[[paste("Lag_Indiv", lag)]] <- list(
+        AIC = AIC(model),
+        BIC = BIC(model),
+        coefficients = summary_model$tTable,
+        p_value = summary_model$tTable[2, 4],
+        bonferroni_p_value = bonferroni_p_value,
+        model = model,
+        penguin_data = penguin_lagged,
+        lag = lag,
+        metric_name = metric_name
+      )
+    }
+  }
+  
+  return(results)
+}
+
+# Function: Create publication-quality plot
+create_plot <- function(penguin_data, gls_model, intercept_ci, slope_ci, 
+                        metric, x_label, title, region_label) {
   new_data <- data.frame(overwinter_metric = seq(min(penguin_data[[metric]], na.rm = TRUE),
                                                  max(penguin_data[[metric]], na.rm = TRUE),
                                                  length.out = 100))
   
-  colnames(new_data) <- metric  # Rename the column back to its original name
+  colnames(new_data) <- metric
   
   predicted_values <- predict(gls_model, new_data)
   
@@ -1504,10 +1042,13 @@ create_plot <- function(penguin_data, gls_model, intercept_ci, slope_ci, metric,
   new_data$lower <- intercept_ci[1] + slope_ci[1] * new_data[[metric]]
   
   plot <- ggplot() +
-    geom_point(data = penguin_data, aes_string(x = metric, y = "growth_rate"), color = "black", size = 1) +
-    geom_line(data = new_data, aes_string(x = metric, y = "fit"), color = "blue") +
-    geom_ribbon(data = new_data, aes_string(x = metric, ymin = "lower", ymax = "upper"), alpha = 0.2) +
-    labs(title = title,
+    geom_point(data = penguin_data, aes_string(x = metric, y = "growth_rate"), 
+               color = "black", size = 1, alpha = 0.6) +
+    geom_line(data = new_data, aes_string(x = metric, y = "fit"), 
+              color = "blue", size = 1) +
+    geom_ribbon(data = new_data, aes_string(x = metric, ymin = "lower", ymax = "upper"), 
+                alpha = 0.2, fill = "blue") +
+    labs(title = paste(title, "-", region_label),
          x = x_label,
          y = "Growth Rate") +
     theme_minimal() +
@@ -1522,508 +1063,865 @@ create_plot <- function(penguin_data, gls_model, intercept_ci, slope_ci, metric,
   return(plot)
 }
 
-# Create the plots with updated x-axis labels
-plot_mean_sic <- create_plot(filtered_penguin_data, gls_models[["overwinter_ice_1yr"]],
-                             conf_intervals_list[["overwinter_ice_1yr"]]$intercept_ci,
-                             conf_intervals_list[["overwinter_ice_1yr"]]$slope_ci,
-                             "overwinter_ice_1yr", "Winter SIC Mean", "Growth Rate vs. Mean SIC")
+# ============================================================================
+# MAIN REGIONAL ANALYSIS FUNCTION
+# ============================================================================
 
-plot_sd_sic <- create_plot(filtered_penguin_data, gls_models[["overwinter_sd_sic_1yr"]],
-                           conf_intervals_list[["overwinter_sd_sic_1yr"]]$intercept_ci,
-                           conf_intervals_list[["overwinter_sd_sic_1yr"]]$slope_ci,
-                           "overwinter_sd_sic_1yr", "Winter SIC SD", "Growth Rate vs. SD SIC")
-
-plot_extent <- create_plot(filtered_penguin_data, gls_models[["overwinter_extent_1yr"]],
-                           conf_intervals_list[["overwinter_extent_1yr"]]$intercept_ci,
-                           conf_intervals_list[["overwinter_extent_1yr"]]$slope_ci,
-                           "overwinter_extent_1yr", "Winter Extent", "Growth Rate vs. Ice Extent")
-
-plot_sd_extent <- create_plot(filtered_penguin_data, gls_models[["overwinter_sd_extent_1yr"]],
-                              conf_intervals_list[["overwinter_sd_extent_1yr"]]$intercept_ci,
-                              conf_intervals_list[["overwinter_sd_extent_1yr"]]$slope_ci,
-                              "overwinter_sd_extent_1yr", "Winter Extent SD", "Growth Rate vs. SD Ice Extent")
-
-# Save the plot objects
-save(plot_mean_sic, plot_sd_sic, plot_extent, plot_sd_extent, file = "penguin_growth_sic_extent_rate_plots.RData")
-
-# Load the plot objects (if needed in the future)
-# load("penguin_growth_sic_extent_rate_plots.RData")
-
-# Combine the plots i
-# n a 2x2 grid
-final_plot <- (plot_mean_sic + plot_sd_sic) / (plot_extent + plot_sd_extent) +
-  plot_layout(heights = c(2, 2)) +
-  plot_annotation(
-    theme = theme(
-      plot.background = element_rect(fill = bg, color = NA),
-      plot.margin = margin(20, 20, 20, 20)
-    )
-  )
-
-# Display the final plot
-print(final_plot)
-
-# Save the figure
-ggsave("growth_rate_effects_sic_extent.png", plot = final_plot, bg = bg, height = 10, width = 12, dpi = 300)
-
-
-```
-
-
-
-**PLOT FOREST PLOTS: Forest plots for SEA ICE CONCENTRATION AND SEA ICE EXTENT**
-
-```{r}
-# Load necessary libraries
-library(ggplot2)
-library(dplyr)
-library(readr)
-
-# Define the directory containing the significant CSV files
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results/concentration_extent"
-
-# Define the metrics to analyze
-metrics <- c("Sea Ice Concentration", "Concentration SD", "Sea Ice Extent", "Sea Ice Extent SD")
-
-# Load the data
-data <- read_csv(file.path(results_dir, "significant_model_results_indiv_ice_metrics_extent_extentsd.csv"))
-
-# Reorder the factor levels for HomeRangeSize and Metric
-data$HomeRangeSize <- factor(data$HomeRangeSize, levels = c("25km", "50km", "100km", "150km", "200km", "250km", "300km", "350km", "400km", "450km", "500km"))
-data$Metric <- recode(data$Metric, 
-                      'mean_sic' = 'Sea Ice Concentration', 
-                      'sd_sic' = 'Concentration SD', 
-                      'ice_extent_km2' = 'Sea Ice Extent',
-                      'Extent_SD' = 'Sea Ice Extent SD')
-
-# Recode the Lag column
-data$Lag <- recode(data$Lag, 
-                   'Lag_Indiv 1' = '1 Year Lag', 
-                   'Lag_Indiv 2' = '2 Year Lag', 
-                   'Lag_Indiv 3' = '3 Year Lag', 
-                   'Lag_Indiv 4' = '4 Year Lag', 
-                   'Lag_Indiv 5' = '5 Year Lag')
-
-# Function to create and save forest plots
-create_forest_plot <- function(data, metric, results_dir) {
-  if (nrow(data) == 0) {
-    cat("No data available for", metric, "\n")
-    return(NULL)
+run_regional_gls_analysis <- function(penguin_abundance_data, 
+                                      metric_files,
+                                      results_dir,
+                                      central_cutoff_lat = -63.2,
+                                      regions = c("Bransfield", "Central_WAP"),
+                                      lags = 1:5,
+                                      min_rows_for_fit = 30,
+                                      metrics_priority = c(
+                                        # daily SIC/extent file
+                                        "mean_sic", "sd_sic", "ice_extent_km2",
+                                        # duration/persistence file
+                                        "mean_duration", "sd_duration",
+                                        "mean_persistence", "sd_persistence"
+                                      )) {
+  
+  # Create main results directory
+  dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
+  
+  # Identify latitude column
+  lat_col <- pick_lat_col(penguin_abundance_data)
+  if (is.null(lat_col)) {
+    stop("No latitude column found in penguin data.")
   }
   
-  plot <- ggplot(data, aes(x = HomeRangeSize, y = Coefficient, color = Metric)) +
-    geom_point() +
-    geom_errorbar(aes(ymin = Coefficient - StdError, ymax = Coefficient + StdError), width = 0.2) +
-    facet_wrap(~ Lag, scales = 'free_x', nrow = 2) +
-    labs(title = paste("Forest Plot of Coefficients for", metric),
-         x = "Home Range Size",
-         y = "Coefficient") +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  # Add year and region columns to penguin data
+  penguin_data_full <- penguin_abundance_data %>%
+    mutate(
+      year = 1970 + season - 1,
+      .lat_raw = .data[[lat_col]],
+      .lat_sgn = if_else(.lat_raw < 0, .lat_raw, -abs(.lat_raw)),
+      region = if_else(.lat_sgn <= central_cutoff_lat, "Central_WAP", "Bransfield")
+    ) %>%
+    filter(growth_rate <= 3, !is.na(growth_rate))
   
-  # Print the plot
-  print(plot)
-  
-  # Save the plot as PNG
-  ggsave(file.path(results_dir, paste0("forest_plot_", metric, ".png")), plot, width = 10, height = 8)
-  
-  # Save the plot as PDF
-  pdf(file.path(results_dir, paste0("forest_plot_", metric, ".pdf")), width = 10, height = 8)
-  print(plot)
-  dev.off()
-}
-
-# Generate forest plots for each metric
-for (metric in metrics) {
-  print(metric)
-  metric_data <- data %>% filter(Metric == metric)
-  create_forest_plot(metric_data, metric, results_dir)
-}
-
-# Generate the combined forest plot
-combined_plot <- ggplot(data, aes(x = HomeRangeSize, y = Coefficient, color = Metric)) +
-  geom_point() +
-  geom_errorbar(aes(ymin = Coefficient - StdError, ymax = Coefficient + StdError), width = 0.2) +
-  facet_wrap(~ Lag, scales = 'free_x', nrow = 2) +
-  labs(title = "Forest Plot of Coefficients by Metric, Home Range Size, and Lag",
-       x = "Home Range Size",
-       y = "Coefficient") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-# Print the combined plot
-print(combined_plot)
-
-# Save the combined plot as PNG
-ggsave(file.path(results_dir, "forest_plot_combined_metrics.png"), combined_plot, width = 12, height = 10)
-
-# Save the combined plot as PDF
-pdf(file.path(results_dir, "forest_plot_combined_metrics.pdf"), width = 12, height = 10)
-print(combined_plot)
-dev.off()
-
-
-```
-
-
-**PLOT FOREST PLOTS: PERSISENCE (OPEN WATER FREQUENCY) and DURATION**
-
-```{r}
-# Load necessary libraries
-library(dplyr)
-library(readr)
-library(ggplot2)
-
-# Define the directory containing the significant CSV files
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
-
-# Define the metrics to analyze
-metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence")
-
-# Initialize an empty list to store the data frames
-all_significant_results <- list()
-
-# Loop through each metric and read the corresponding CSV file
-for (metric in metrics) {
-  file_path <- file.path(results_dir, paste0("significant_model_results_indiv_", metric, ".csv"))
-  
-  # Check if the file exists
-  if (file.exists(file_path)) {
-    # Read the CSV file and add the metric as a new column
-    data <- read_csv(file_path) %>%
-      mutate(Metric_Type = metric)
-    all_significant_results[[metric]] <- data
-  } else {
-    cat("File does not exist:", file_path, "\n")
+  # LOOP THROUGH EACH REGION
+  for (region_name in regions) {
+    
+    cat("\n", rep("=", 70), "\n")
+    cat(sprintf("ANALYZING REGION: %s\n", region_name))
+    cat(rep("=", 70), "\n\n")
+    
+    # Create region-specific directory
+    region_dir <- file.path(results_dir, region_name)
+    dir.create(region_dir, showWarnings = FALSE, recursive = TRUE)
+    
+    # Subset penguin data for this region
+    penguin_data_region <- penguin_data_full %>%
+      filter(region == region_name)
+    
+    cat(sprintf("  N colonies in %s: %d\n", region_name, n_distinct(penguin_data_region$site_id)))
+    cat(sprintf("  N observations in %s: %d\n\n", region_name, nrow(penguin_data_region)))
+    
+    # Initialize results storage
+    all_results_list <- list()
+    
+    # LOOP THROUGH EACH METRIC FILE
+    for (f in metric_files) {
+      cat(sprintf("\nProcessing file: %s\n", basename(f)))
+      
+      dat <- fread(f)
+      
+      # Normalize presence of grouping columns
+      if (!"HomeRangeSize" %in% names(dat)) dat[, HomeRangeSize := "Unknown"]
+      if (!"Threshold" %in% names(dat)) dat[, Threshold := NA_real_]
+      
+      # Which metric columns are in THIS file?
+      metric_cols <- intersect(metrics_priority, names(dat))
+      if (length(metric_cols) == 0) {
+        warning(sprintf("  No recognized metric columns in file: %s", basename(f)))
+        next
+      }
+      
+      cat(sprintf("  Found metrics: %s\n", paste(metric_cols, collapse = ", ")))
+      
+      home_sizes <- sort(unique(dat$HomeRangeSize))
+      thresholds <- sort(unique(dat$Threshold))
+      
+      # LOOP THROUGH HOME RANGE SIZES AND THRESHOLDS
+      for (h in home_sizes) {
+        for (th in thresholds) {
+          
+          df_ht <- dat %>% filter(HomeRangeSize == h, is.na(Threshold) | Threshold == th)
+          if (nrow(df_ht) == 0) next
+          
+          cat(sprintf("  HomeRange: %s, Threshold: %s\n", h, as.character(th)))
+          
+          # LOOP THROUGH EACH METRIC COLUMN
+          for (metric_col in metric_cols) {
+            
+            # Map metric_col to a friendly name
+            metric_name <- dplyr::case_when(
+              metric_col == "mean_sic"         ~ "SIC",
+              metric_col == "sd_sic"           ~ "SIC_SD",
+              metric_col == "ice_extent_km2"   ~ "Extent",
+              metric_col == "mean_duration"    ~ "Duration",
+              metric_col == "sd_duration"      ~ "Duration_SD",
+              metric_col == "mean_persistence" ~ "Persistence",  # aka Open Water Frequency
+              metric_col == "sd_persistence"   ~ "Persistence_SD",
+              TRUE                              ~ metric_col
+            )
+            
+            cat(sprintf("    Metric: %s (%s)\n", metric_name, metric_col))
+            
+            # Build yearly time series for this metric
+            d_year <- tryCatch(
+              yearly_aggregate_metric(df_ht, metric_col),
+              error = function(e) {
+                warning(sprintf("      Skipping %s: %s", metric_col, e$message))
+                return(NULL)
+              }
+            )
+            if (is.null(d_year)) next
+            
+            # Fit GLS models across lags
+            gls_results <- fit_gls_models_indiv(penguin_data_region, d_year, metric_name)
+            
+            # Extract results to data frames
+            if (length(gls_results) > 0) {
+              for (lag_name in names(gls_results)) {
+                result <- gls_results[[lag_name]]
+                
+                result_df <- data.frame(
+                  Region = region_name,
+                  File = basename(f),
+                  Metric = metric_name,
+                  MetricColumn = metric_col,
+                  HomeRangeSize = h,
+                  Threshold = th,
+                  Lag = result$lag,
+                  N_Obs = nrow(result$penguin_data),
+                  N_Colonies = n_distinct(result$penguin_data$site_id),
+                  AIC = result$AIC,
+                  BIC = result$BIC,
+                  Coefficient_Intercept = result$coefficients[1, 1],
+                  StdError_Intercept = result$coefficients[1, 2],
+                  tValue_Intercept = result$coefficients[1, 3],
+                  pValue_Intercept = result$coefficients[1, 4],
+                  Coefficient = result$coefficients[2, 1],
+                  StdError = result$coefficients[2, 2],
+                  tValue = result$coefficients[2, 3],
+                  pValue = result$coefficients[2, 4],
+                  Bonferroni_Adjusted_pValue = result$bonferroni_p_value,
+                  stringsAsFactors = FALSE
+                )
+                
+                all_results_list[[length(all_results_list) + 1]] <- result_df
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    # Export compiled results for this region
+    if (length(all_results_list) > 0) {
+      all_results_df <- bind_rows(all_results_list)
+      
+      # Save all results
+      write.csv(all_results_df, 
+                file.path(region_dir, "model_results_all_metrics.csv"), 
+                row.names = FALSE)
+      cat(sprintf("\nSaved all results: %s\n", 
+                  file.path(region_dir, "model_results_all_metrics.csv")))
+      
+      # Save significant results
+      significant_results <- all_results_df %>%
+        filter(Bonferroni_Adjusted_pValue < 0.05)
+      
+      if (nrow(significant_results) > 0) {
+        write.csv(significant_results, 
+                  file.path(region_dir, "model_results_significant.csv"), 
+                  row.names = FALSE)
+        cat(sprintf("Saved significant results: %s\n", 
+                    file.path(region_dir, "model_results_significant.csv")))
+      } else {
+        cat(sprintf("No significant results for %s\n", region_name))
+      }
+    }
   }
+  
+  cat("\n", rep("=", 70), "\n")
+  cat("REGIONAL ANALYSIS COMPLETE\n")
+  cat(rep("=", 70), "\n")
 }
 
-# Combine all data frames into a single data frame
-merged_significant_results <- bind_rows(all_significant_results)
-
-# Save the merged data frame to a new CSV file
-merged_file_path <- file.path(results_dir, "merged_significant_model_results_duration_persistence.csv")
-write_csv(merged_significant_results, merged_file_path)
-
-cat("Merged CSV file saved to:", merged_file_path, "\n")
-
-# Load the merged data for plotting
-data <- read_csv(merged_file_path)
-
-# Reorder the factor levels for HomeRangeSize and Metric
-data$HomeRangeSize <- factor(data$HomeRangeSize, levels = c("25km", "50km", "100km", "150km", "200km", "250km", "300km", "350km", "400km", "450km", "500km"))
-data$Metric <- recode(data$Metric, 
-                      'mean_duration' = 'Duration', 
-                      'sd_duration' = 'Duration SD', 
-                      'mean_persistence' = 'Open Water Frequency',
-                      'sd_persistence' = 'Open Water Frequency SD')
-
-# Recode the Lag column
-data$Lag <- recode(data$Lag, 
-                   'Lag_Indiv 1' = '1 Year Lag', 
-                   'Lag_Indiv 2' = '2 Year Lag', 
-                   'Lag_Indiv 3' = '3 Year Lag', 
-                   'Lag_Indiv 4' = '4 Year Lag',
-                   'Lag_Indiv 5' = '5 Year Lag')
-
-# Function to create and save forest plots
-create_forest_plot <- function(data, metric, threshold, results_dir) {
-  if (nrow(data) == 0) {
-    cat("No data available for", metric, "at", threshold * 100, "% threshold\n")
-    return(NULL)
-  }
-  
-  plot <- ggplot(data, aes(x = HomeRangeSize, y = Coefficient, color = Metric)) +
-    geom_point() +
-    geom_errorbar(aes(ymin = Coefficient - StdError, ymax = Coefficient + StdError), width = 0.2) +
-    facet_wrap(~ Lag, scales = 'free_x', nrow = 2) +
-    labs(title = paste("Forest Plot of Coefficients for", metric, "at", threshold * 100, "% Threshold"),
-         x = "Home Range Size",
-         y = "Coefficient") +
-    theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  
-  # Print the plot
-  print(plot)
-  
-  # Save the plot as PNG
-  ggsave(file.path(results_dir, paste0("forest_plot_", metric, "_", threshold * 100, "pct.png")), plot, width = 10, height = 8)
-  
-  # Save the plot as PDF
-  pdf(file.path(results_dir, paste0("forest_plot_", metric, "_", threshold * 100, "pct.pdf")), width = 10, height = 8)
-  print(plot)
-  dev.off()
-}
-
-# Generate forest plots for each metric and threshold
-thresholds <- unique(data$Threshold)
-for (metric in metrics) {
-  for (threshold in thresholds) {
-    metric_data <- data %>% filter(Metric_Type == metric, Threshold == threshold)
-    create_forest_plot(metric_data, metric, threshold, results_dir)
-  }
-}
-
-# Generate the combined forest plot
-combined_plot <- ggplot(data, aes(x = HomeRangeSize, y = Coefficient, color = Metric)) +
-  geom_point() +
-  geom_errorbar(aes(ymin = Coefficient - StdError, ymax = Coefficient + StdError), width = 0.2) +
-  facet_wrap(~ Lag + Threshold, scales = 'free_x', nrow = 2) +
-  labs(title = "Forest Plot of Coefficients by Metric, Home Range Size, Lag, and Threshold",
-       x = "Home Range Size",
-       y = "Coefficient") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-# Print the combined plot
-print(combined_plot)
-
-# Save the combined plot as PNG
-ggsave(file.path(results_dir, "Figure_forest_plot_combined_metrics_thresholds_Durations-Persistence.png"), combined_plot, width = 12, height = 10)
-
-# Save the combined plot as PDF
-pdf(file.path(results_dir, "Figure_forest_plot_combined_metrics_thresholds_Durations-Persistence.pdf"), width = 12, height = 10)
-print(combined_plot)
-dev.off()
-
-
-```
-
-**Plot Persistence and Duration for single model**
-
-```{r}
-# Load necessary libraries
-library(nlme)
-library(data.table)
-library(dplyr)
-library(ggplot2)
-library(gridExtra)
-library(showtext)
-library(patchwork)
+# ============================================================================
+# EXAMPLE USAGE
+# ============================================================================
 
 # Define file paths
-sea_ice_duration_persistence_stats_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/metric-calculation-csv/sea_ice_duration_persistence_stats.csv"
-modeled_gentoo_parameters_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv"
+penguin_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/modeled_gentoo_parameters.csv"
 
-# Load the data files
-sea_ice_duration_persistence_df <- fread(sea_ice_duration_persistence_stats_path)
-modeled_gentoo_parameters_df <- fread(modeled_gentoo_parameters_path)
+metric_files <- c(
+  "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/metric-calculation-csv/daily_sic_statistics.csv",
+  "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/metric-calculation-csv/sea_ice_duration_persistence_stats.csv"
+)
 
-# Compute annual ice metrics
-compute_annual_ice_metrics <- function(ice_data, metrics) {
-  ice_data <- ice_data %>%
-    filter(month == "Season-wide") %>%
-    mutate(year = as.integer(year))
-  
-  annual_ice_metrics <- ice_data %>%
-    group_by(year, Threshold, HomeRangeSize) %>%
-    summarize(across(all_of(metrics), ~mean(.x, na.rm = TRUE), .names = "mean_{.col}"),
-              .groups = 'drop')
-  
-  return(annual_ice_metrics)
-}
+results_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/RStudioProject/Results/Regional_Analysis"
 
-# Define the metrics to analyze
-metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence")
+# Load penguin data
+penguin_data <- fread(penguin_path)
 
-# Compute the annual ice metrics
-annual_ice_metrics <- compute_annual_ice_metrics(sea_ice_duration_persistence_df, metrics)
+# Run regional analysis (processes all metrics from both files)
+run_regional_gls_analysis(
+  penguin_abundance_data = penguin_data,
+  metric_files = metric_files,
+  results_dir = results_path,
+  central_cutoff_lat = -63.2,
+  regions = c("Bransfield", "Central_WAP"),
+  lags = 1:5,
+  min_rows_for_fit = 30
+)
 
-# Function to get precomputed ice metrics
-get_precomputed_ice_metrics <- function(year, ice_data, metric) {
-  ice_value <- ice_data %>%
-    filter(year == !!year) %>%
-    pull(!!sym(metric))
-  
-  if (length(ice_value) > 0) {
-    return(mean(ice_value, na.rm = TRUE))
-  } else {
-    return(NA)
-  }
-}
+# ============================================================================
+# VISUALIZATION: Create comparison plots for significant results
+# ============================================================================
 
-# Calculate the average ice metrics from the prior year
-penguin_data_with_ice <- modeled_gentoo_parameters_df %>%
-  rowwise() %>%
-  mutate(
-    overwinter_mean_duration_1yr = get_precomputed_ice_metrics(year - 1, annual_ice_metrics, "mean_mean_duration"),
-    overwinter_sd_duration_1yr = get_precomputed_ice_metrics(year - 1, annual_ice_metrics, "mean_sd_duration"),
-    overwinter_mean_persistence_1yr = get_precomputed_ice_metrics(year - 1, annual_ice_metrics, "mean_mean_persistence"),
-    overwinter_sd_persistence_1yr = get_precomputed_ice_metrics(year - 1, annual_ice_metrics, "mean_sd_persistence")
-  ) %>%
-  ungroup()
-
-# Filter out growth rates above 3
-filtered_penguin_data <- penguin_data_with_ice %>%
-  filter(growth_rate <= 3)
-
-# Function to fit GLS model for average metric from 1 year with filtered data
-fit_gls_model_avg <- function(penguin_data, metric) {
-  penguin_data <- penguin_data %>%
-    filter(!is.na(!!sym(metric)), !is.na(growth_rate))
-  
-  print(paste("Fitting GLS model for average lag 1 year for", metric))
-  formula <- as.formula(paste("growth_rate ~", metric))
-  model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_data)
-  
-  return(model)
-}
-
-# Fit the models for the new metrics
-gls_models <- list()
-metrics_list <- c("overwinter_mean_duration_1yr", "overwinter_sd_duration_1yr", "overwinter_mean_persistence_1yr", "overwinter_sd_persistence_1yr")
-
-for (metric in metrics_list) {
-  gls_models[[metric]] <- fit_gls_model_avg(filtered_penguin_data, metric)
-}
-
-# Get confidence intervals for the model coefficients
-conf_intervals <- lapply(gls_models, intervals)
-
-# Extract the confidence intervals for the intercept and slope
-conf_intervals_list <- lapply(conf_intervals, function(ci) {
-  list(
-    intercept_ci = ci$coef[1, ],
-    slope_ci = ci$coef[2, ]
-  )
-})
-
-# Plot settings
+# Load font for plots
 font <- "Gudea"
 font_add_google(family = font, font, db_cache = TRUE)
 showtext_auto()
-
 theme_set(theme_minimal(base_family = font, base_size = 12))
-bg <- "#F4F5F1"
-txt_col <- "black"
 
-# Function to create prediction data and plot
-create_plot <- function(penguin_data, gls_model, intercept_ci, slope_ci, metric, title) {
-  new_data <- data.frame(overwinter_metric = seq(min(penguin_data[[metric]], na.rm = TRUE),
-                                                 max(penguin_data[[metric]], na.rm = TRUE),
-                                                 length.out = 100))
+# Function to create comparison plots between regions
+create_regional_comparison_plots <- function(results_dir, 
+                                             penguin_data_path,
+                                             metric_files,
+                                             central_cutoff_lat = -63.2) {
   
-  colnames(new_data) <- metric  # Rename the column back to its original name
+  cat("\n", rep("=", 70), "\n")
+  cat("CREATING REGIONAL COMPARISON PLOTS\n")
+  cat(rep("=", 70), "\n\n")
   
-  predicted_values <- predict(gls_model, new_data)
+  # Load penguin data
+  penguin_full <- fread(penguin_data_path)
+  lat_col <- pick_lat_col(penguin_full)
   
-  new_data$fit <- predicted_values
-  new_data$upper <- intercept_ci[3] + slope_ci[3] * new_data[[metric]]
-  new_data$lower <- intercept_ci[1] + slope_ci[1] * new_data[[metric]]
+  # Add regions
+  penguin_full <- penguin_full %>%
+    mutate(
+      year = 1970 + season - 1,
+      .lat_raw = .data[[lat_col]],
+      .lat_sgn = if_else(.lat_raw < 0, .lat_raw, -abs(.lat_raw)),
+      region = if_else(.lat_sgn <= central_cutoff_lat, "Central_WAP", "Bransfield")
+    ) %>%
+    filter(growth_rate <= 3, !is.na(growth_rate))
   
-  plot <- ggplot() +
-    geom_point(data = penguin_data, aes_string(x = metric, y = "growth_rate"), color = "black", size = 1) +
-    geom_line(data = new_data, aes_string(x = metric, y = "fit"), color = "blue") +
-    geom_ribbon(data = new_data, aes_string(x = metric, ymin = "lower", ymax = "upper"), alpha = 0.2) +
-    labs(title = title,
-         x = metric,
-         y = "Growth Rate") +
+  # Check if significant results exist for both regions
+  brans_sig_path <- file.path(results_dir, "Bransfield", "model_results_significant.csv")
+  central_sig_path <- file.path(results_dir, "Central_WAP", "model_results_significant.csv")
+  
+  if (!file.exists(brans_sig_path) & !file.exists(central_sig_path)) {
+    cat("No significant results found for either region. Skipping plots.\n")
+    return(NULL)
+  }
+  
+  # Load significant results from both regions
+  sig_results_list <- list()
+  
+  if (file.exists(brans_sig_path)) {
+    sig_results_list[["Bransfield"]] <- read.csv(brans_sig_path)
+  }
+  
+  if (file.exists(central_sig_path)) {
+    sig_results_list[["Central_WAP"]] <- read.csv(central_sig_path)
+  }
+  
+  # Create plot directory
+  plot_dir <- file.path(results_dir, "Comparison_Plots")
+  dir.create(plot_dir, showWarnings = FALSE)
+  
+  # Get all unique metric/threshold/homerange/lag combinations across both regions
+  all_combos <- bind_rows(sig_results_list) %>%
+    select(Metric, HomeRangeSize, Threshold, Lag) %>%
+    distinct() %>%
+    arrange(Metric, Lag)
+  
+  cat(sprintf("Found %d unique significant metric combinations\n", nrow(all_combos)))
+  
+  # Load all metric data
+  metric_data_list <- lapply(metric_files, function(f) {
+    dat <- fread(f)
+    dat$source_file <- basename(f)
+    return(dat)
+  })
+  
+  # For each combination, create side-by-side plots
+  for (i in 1:nrow(all_combos)) {
+    combo <- all_combos[i, ]
+    
+    cat(sprintf("\nPlot %d/%d: %s, HR=%s, Threshold=%s, Lag=%d\n",
+                i, nrow(all_combos), combo$Metric, combo$HomeRangeSize, 
+                combo$Threshold, combo$Lag))
+    
+    plot_list <- list()
+    
+    # Create plot for each region that has this significant result
+    for (region_name in names(sig_results_list)) {
+      
+      # Check if this region has this specific result
+      region_result <- sig_results_list[[region_name]] %>%
+        filter(Metric == combo$Metric,
+               HomeRangeSize == combo$HomeRangeSize,
+               Threshold == combo$Threshold,
+               Lag == combo$Lag)
+      
+      if (nrow(region_result) == 0) {
+        cat(sprintf("  Skipping %s (not significant)\n", region_name))
+        next
+      }
+      
+      # Get the metric column name from the result
+      metric_col <- region_result$MetricColumn[1]
+      
+      # Find the appropriate metric file
+      metric_file <- metric_files[grepl(region_result$File[1], metric_files)]
+      if (length(metric_file) == 0) next
+      
+      # Load and process metric data
+      metric_dat <- fread(metric_file) %>%
+        filter(HomeRangeSize == combo$HomeRangeSize,
+               (is.na(Threshold) | Threshold == combo$Threshold))
+      
+      # Aggregate to yearly
+      metric_yearly <- yearly_aggregate_metric(metric_dat, metric_col) %>%
+        mutate(year = year + combo$Lag)
+      
+      # Merge with penguin data for this region
+      penguin_region <- penguin_full %>%
+        filter(region == region_name) %>%
+        left_join(metric_yearly, by = "year") %>%
+        filter(!is.na(metric_value), !is.na(growth_rate))
+      
+      if (nrow(penguin_region) == 0) {
+        cat(sprintf("  No data available for %s after merging\n", region_name))
+        next
+      }
+      
+      # Check for sufficient variation in metric
+      if (sd(penguin_region$metric_value, na.rm = TRUE) == 0) {
+        cat(sprintf("  No variation in metric for %s, skipping\n", region_name))
+        next
+      }
+      
+      # Refit the model for plotting
+      model <- gls(growth_rate ~ metric_value, 
+                   correlation = corAR1(form = ~1 | site_id), 
+                   data = penguin_region)
+      
+      # Try to get confidence intervals with error handling
+      conf_int <- tryCatch(
+        intervals(model),
+        error = function(e) {
+          warning(sprintf("Could not compute confidence intervals for %s: %s", 
+                          region_name, e$message))
+          return(NULL)
+        }
+      )
+      
+      if (is.null(conf_int)) {
+        cat(sprintf("  Skipping plot for %s (confidence interval error)\n", region_name))
+        next
+      }
+      
+      intercept_ci <- conf_int$coef[1, ]
+      slope_ci <- conf_int$coef[2, ]
+      
+      # Create prediction data
+      new_data <- data.frame(
+        metric_value = seq(min(penguin_region$metric_value, na.rm = TRUE),
+                           max(penguin_region$metric_value, na.rm = TRUE),
+                           length.out = 100)
+      )
+      
+      new_data$fit <- predict(model, new_data)
+      new_data$upper <- intercept_ci[3] + slope_ci[3] * new_data$metric_value
+      new_data$lower <- intercept_ci[1] + slope_ci[1] * new_data$metric_value
+      
+      # Create plot
+      p <- ggplot() +
+        geom_point(data = penguin_region, 
+                   aes(x = metric_value, y = growth_rate), 
+                   color = "black", size = 1.5, alpha = 0.6) +
+        geom_line(data = new_data, 
+                  aes(x = metric_value, y = fit), 
+                  color = "blue", linewidth = 1) +
+        geom_ribbon(data = new_data, 
+                    aes(x = metric_value, ymin = lower, ymax = upper), 
+                    alpha = 0.2, fill = "blue") +
+        labs(title = region_name,
+             subtitle = sprintf("N=%d, p=%.4f", 
+                                nrow(penguin_region),
+                                region_result$Bonferroni_Adjusted_pValue[1]),
+             x = combo$Metric,
+             y = "Growth Rate") +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5, size = 10),
+          plot.margin = margin(10, 10, 10, 10)
+        ) +
+        ylim(NA, 1.5)
+      
+      plot_list[[region_name]] <- p
+    }
+    
+    # If we have plots for both regions, combine them
+    if (length(plot_list) > 0) {
+      combined_plot <- wrap_plots(plot_list, ncol = length(plot_list)) +
+        plot_annotation(
+          title = sprintf("%s vs Growth Rate (Lag %d years)", combo$Metric, combo$Lag),
+          subtitle = sprintf("HomeRange: %s, Threshold: %s", 
+                             combo$HomeRangeSize, combo$Threshold),
+          theme = theme(
+            plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+            plot.subtitle = element_text(size = 12, hjust = 0.5)
+          )
+        )
+      
+      # Save plot
+      plot_filename <- sprintf("%s_HR%s_Thr%s_Lag%d.png",
+                               gsub(" ", "_", combo$Metric),
+                               combo$HomeRangeSize,
+                               combo$Threshold,
+                               combo$Lag)
+      
+      tryCatch({
+        suppressWarnings({
+          ggsave(file.path(plot_dir, plot_filename),
+                 plot = combined_plot,
+                 width = 4 * length(plot_list),
+                 height = 5,
+                 dpi = 300)
+        })
+        cat(sprintf("  Saved: %s\n", plot_filename))
+      }, error = function(e) {
+        warning(sprintf("Could not save plot %s: %s", plot_filename, e$message))
+      })
+    }
+  }
+  
+  cat("\n", rep("=", 70), "\n")
+  cat("PLOT GENERATION COMPLETE\n")
+  cat(rep("=", 70), "\n")
+}
+
+# Run visualization (wrapped in tryCatch to handle errors gracefully)
+tryCatch({
+  create_regional_comparison_plots(
+    results_dir = results_path,
+    penguin_data_path = penguin_path,
+    metric_files = metric_files,
+    central_cutoff_lat = -63.2
+  )
+}, error = function(e) {
+  cat("\nError during plot generation:", e$message, "\n")
+  cat("Continuing with summary table...\n")
+})
+
+# ============================================================================
+# SUMMARY TABLE: Compare effect sizes between regions
+# ============================================================================
+
+create_regional_comparison_table <- function(results_dir) {
+  
+  cat("\n", rep("=", 70), "\n")
+  cat("CREATING REGIONAL COMPARISON SUMMARY TABLE\n")
+  cat(rep("=", 70), "\n\n")
+  
+  # Load significant results from both regions
+  brans_sig_path <- file.path(results_dir, "Bransfield", "model_results_significant.csv")
+  central_sig_path <- file.path(results_dir, "Central_WAP", "model_results_significant.csv")
+  
+  results_list <- list()
+  
+  if (file.exists(brans_sig_path)) {
+    results_list[["Bransfield"]] <- read.csv(brans_sig_path)
+  }
+  
+  if (file.exists(central_sig_path)) {
+    results_list[["Central_WAP"]] <- read.csv(central_sig_path)
+  }
+  
+  if (length(results_list) == 0) {
+    cat("No significant results found. Cannot create comparison table.\n")
+    return(NULL)
+  }
+  
+  # Combine all results
+  all_results <- bind_rows(results_list)
+  
+  # Create comparison summary
+  comparison <- all_results %>%
+    group_by(Region, Metric, Lag) %>%
+    summarise(
+      N_Models = n(),
+      Mean_Coefficient = mean(Coefficient, na.rm = TRUE),
+      SD_Coefficient = sd(Coefficient, na.rm = TRUE),
+      Mean_pValue = mean(pValue, na.rm = TRUE),
+      Min_pValue = min(pValue, na.rm = TRUE),
+      Mean_N_Obs = mean(N_Obs, na.rm = TRUE),
+      Mean_N_Colonies = mean(N_Colonies, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(Metric, Lag, Region)
+  
+  # Save comparison table
+  write.csv(comparison, 
+            file.path(results_dir, "Regional_Comparison_Summary.csv"),
+            row.names = FALSE)
+  
+  cat("Saved summary table: Regional_Comparison_Summary.csv\n")
+  
+  # Print key comparisons
+  cat("\n=== KEY COMPARISONS ===\n")
+  
+  # For each metric, show if both regions have significant effects
+  metrics_in_both <- comparison %>%
+    group_by(Metric, Lag) %>%
+    filter(n() == 2) %>%  # Both regions present
+    ungroup()
+  
+  if (nrow(metrics_in_both) > 0) {
+    cat("\nMetrics significant in BOTH regions:\n")
+    for (met in unique(metrics_in_both$Metric)) {
+      cat(sprintf("\n%s:\n", met))
+      subset_met <- metrics_in_both %>% filter(Metric == met)
+      print(subset_met %>% select(Region, Lag, Mean_Coefficient, Min_pValue, Mean_N_Colonies))
+    }
+  }
+  
+  # Show metrics only in one region
+  metrics_single <- comparison %>%
+    group_by(Metric, Lag) %>%
+    filter(n() == 1) %>%
+    ungroup()
+  
+  if (nrow(metrics_single) > 0) {
+    cat("\n\nMetrics significant in ONLY ONE region:\n")
+    print(metrics_single %>% select(Region, Metric, Lag, Mean_Coefficient, Min_pValue))
+  }
+  
+  cat("\n", rep("=", 70), "\n")
+  
+  return(comparison)
+}
+
+# ============================================================================
+# FOREST PLOTS: Regional Comparison of Effect Sizes
+# ============================================================================
+
+create_regional_forest_plots <- function(results_dir) {
+  
+  cat("\n", rep("=", 70), "\n")
+  cat("CREATING REGIONAL COMPARISON FOREST PLOTS\n")
+  cat(rep("=", 70), "\n\n")
+  
+  # Load significant results from both regions
+  brans_sig_path <- file.path(results_dir, "Bransfield", "model_results_significant.csv")
+  central_sig_path <- file.path(results_dir, "Central_WAP", "model_results_significant.csv")
+  
+  results_list <- list()
+  
+  if (file.exists(brans_sig_path)) {
+    results_list[["Bransfield"]] <- read.csv(brans_sig_path)
+  }
+  
+  if (file.exists(central_sig_path)) {
+    results_list[["Central_WAP"]] <- read.csv(central_sig_path)
+  }
+  
+  if (length(results_list) == 0) {
+    cat("No significant results found. Cannot create forest plots.\n")
+    return(NULL)
+  }
+  
+  # Combine all results
+  all_results <- bind_rows(results_list)
+  
+  # Create forest plot directory
+  forest_dir <- file.path(results_dir, "Forest_Plots")
+  dir.create(forest_dir, showWarnings = FALSE)
+  
+  # Recode Lag column for better labels
+  all_results$Lag_Label <- recode(all_results$Lag,
+                                  `1` = '1 Year Lag',
+                                  `2` = '2 Year Lag',
+                                  `3` = '3 Year Lag',
+                                  `4` = '4 Year Lag',
+                                  `5` = '5 Year Lag')
+  
+  # Recode Metric names for better labels
+  all_results$Metric_Label <- recode(all_results$Metric,
+                                     'SIC' = 'Sea Ice Concentration',
+                                     'SIC_SD' = 'SIC Variability',
+                                     'Extent' = 'Sea Ice Extent',
+                                     'Duration' = 'Sea Ice Duration',
+                                     'Duration_SD' = 'Duration Variability',
+                                     'Persistence' = 'Open Water Frequency',
+                                     'Persistence_SD' = 'Open Water Freq. Variability')
+  
+  # ========================================================================
+  # PLOT 1: Combined forest plot for all metrics (faceted by metric)
+  # ========================================================================
+  cat("\nCreating combined forest plot across all metrics...\n")
+  
+  combined_forest <- ggplot(all_results, 
+                            aes(x = HomeRangeSize, y = Coefficient, 
+                                color = Region, shape = Region)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", alpha = 0.5) +
+    geom_point(position = position_dodge(width = 0.5), size = 2) +
+    geom_errorbar(aes(ymin = Coefficient - StdError, 
+                      ymax = Coefficient + StdError),
+                  position = position_dodge(width = 0.5),
+                  width = 0.3,
+                  linewidth = 0.5) +
+    facet_wrap(~ Metric_Label + Lag_Label, scales = 'free', ncol = 5) +
+    scale_color_manual(values = c("Bransfield" = "#2166AC", 
+                                  "Central_WAP" = "#B2182B")) +
+    scale_shape_manual(values = c("Bransfield" = 16, 
+                                  "Central_WAP" = 17)) +
+    labs(title = "Regional Comparison: Effect of Sea Ice Metrics on Gentoo Growth Rates",
+         subtitle = "Bransfield (South Shetland Islands) vs Central WAP (Gerlache Strait/Anvers)",
+         x = "Home Range Size",
+         y = "Effect Size (Coefficient ± SE)",
+         color = "Region",
+         shape = "Region") +
     theme_minimal() +
     theme(
-      plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
-      plot.subtitle = element_text(hjust = 0.5, size = 12),
-      plot.caption = element_text(hjust = 0.5, size = 10),
-      plot.margin = margin(20, 20, 20, 20)
-    ) +
-    ylim(NA, 1.5)
-  
-  return(plot)
-}
-
-# Create the plots
-plot_mean_duration <- create_plot(filtered_penguin_data, gls_models[["overwinter_mean_duration_1yr"]],
-                                  conf_intervals_list[["overwinter_mean_duration_1yr"]]$intercept_ci,
-                                  conf_intervals_list[["overwinter_mean_duration_1yr"]]$slope_ci,
-                                  "overwinter_mean_duration_1yr", "Growth Rate vs. Mean Duration")
-
-plot_sd_duration <- create_plot(filtered_penguin_data, gls_models[["overwinter_sd_duration_1yr"]],
-                                conf_intervals_list[["overwinter_sd_duration_1yr"]]$intercept_ci,
-                                conf_intervals_list[["overwinter_sd_duration_1yr"]]$slope_ci,
-                                "overwinter_sd_duration_1yr", "Growth Rate vs. SD Duration")
-
-plot_mean_persistence <- create_plot(filtered_penguin_data, gls_models[["overwinter_mean_persistence_1yr"]],
-                                     conf_intervals_list[["overwinter_mean_persistence_1yr"]]$intercept_ci,
-                                     conf_intervals_list[["overwinter_mean_persistence_1yr"]]$slope_ci,
-                                     "overwinter_mean_persistence_1yr", "Growth Rate vs. Mean Persistence")
-
-plot_sd_persistence <- create_plot(filtered_penguin_data, gls_models[["overwinter_sd_persistence_1yr"]],
-                                   conf_intervals_list[["overwinter_sd_persistence_1yr"]]$intercept_ci,
-                                   conf_intervals_list[["overwinter_sd_persistence_1yr"]]$slope_ci,
-                                   "overwinter_sd_persistence_1yr", "Growth Rate vs. SD Persistence")
-
-# Save the plot objects
-save(plot_mean_duration, plot_sd_duration, plot_mean_persistence, plot_sd_persistence, file = "penguin_growth_persistence-duration_rate_plots.RData")
-
-# Load the plot objects (if needed in the future)
-# load("penguin_growth_rate_plots.RData")
-
-# Combine the plots in a 2x2 grid
-final_plot <- (plot_mean_duration + plot_sd_duration) / (plot_mean_persistence + plot_sd_persistence) +
-  plot_layout(heights = c(2, 2)) +
-  plot_annotation(
-    theme = theme(
-      plot.background = element_rect(fill = bg, color = NA),
-      plot.margin = margin(20, 20, 20, 20)
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+      axis.text.y = element_text(size = 8),
+      strip.text = element_text(size = 9, face = "bold"),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 11, hjust = 0.5),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
     )
-  )
-
-# Display the final plot
-print(final_plot)
-
-# Save the figure
-ggsave("growth_rate_effects.png", plot = final_plot, bg = bg, height = 10, width = 12, dpi = 300)
-
-
-
-```
-
-
-
-**Compile Significant Results**
-```{r}
-
-# Load necessary libraries
-library(dplyr)
-library(readr)
-
-# Define the directory containing the CSV files
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/significant"
-
-# Get a list of all CSV files in the directory
-csv_files <- list.files(path = results_dir, pattern = "*.csv", full.names = TRUE)
-
-# Initialize an empty list to store the dataframes
-dfs <- list()
-
-# Loop through each CSV file and read the data
-for (file in csv_files) {
-  # Read the current CSV file using readr
-  df <- read_csv(file, col_types = cols(.default = "c"))  # Read all columns as character
   
-  # Append the dataframe to the list
-  dfs <- append(dfs, list(df))
+  # Save combined forest plot
+  ggsave(file.path(forest_dir, "Regional_Comparison_Combined_Forest_Plot.png"),
+         combined_forest, width = 18, height = 12, dpi = 300)
+  
+  ggsave(file.path(forest_dir, "Regional_Comparison_Combined_Forest_Plot.pdf"),
+         combined_forest, width = 18, height = 12)
+  
+  cat("  Saved: Regional_Comparison_Combined_Forest_Plot.png/pdf\n")
+  
+  # ========================================================================
+  # PLOT 2: Individual forest plots for each metric
+  # ========================================================================
+  cat("\nCreating individual forest plots for each metric...\n")
+  
+  unique_metrics <- unique(all_results$Metric_Label)
+  
+  for (metric in unique_metrics) {
+    
+    metric_data <- all_results %>% filter(Metric_Label == metric)
+    
+    if (nrow(metric_data) == 0) next
+    
+    cat(sprintf("  Creating plot for: %s\n", metric))
+    
+    metric_forest <- ggplot(metric_data,
+                            aes(x = HomeRangeSize, y = Coefficient,
+                                color = Region, shape = Region)) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", alpha = 0.5) +
+      geom_point(position = position_dodge(width = 0.5), size = 3) +
+      geom_errorbar(aes(ymin = Coefficient - StdError,
+                        ymax = Coefficient + StdError),
+                    position = position_dodge(width = 0.5),
+                    width = 0.3,
+                    linewidth = 0.7) +
+      facet_wrap(~ Lag_Label, scales = 'free_x', nrow = 1) +
+      scale_color_manual(values = c("Bransfield" = "#2166AC",
+                                    "Central_WAP" = "#B2182B")) +
+      scale_shape_manual(values = c("Bransfield" = 16,
+                                    "Central_WAP" = 17)) +
+      labs(title = paste("Regional Comparison:", metric),
+           subtitle = "Effect on Gentoo Penguin Growth Rates",
+           x = "Home Range Size",
+           y = "Effect Size (Coefficient ± SE)",
+           color = "Region",
+           shape = "Region") +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(size = 11, hjust = 0.5),
+        strip.text = element_text(size = 11, face = "bold"),
+        legend.position = "bottom",
+        panel.grid.minor = element_blank()
+      )
+    
+    # Save individual metric plot
+    metric_filename <- gsub(" ", "_", tolower(metric))
+    ggsave(file.path(forest_dir, paste0("Regional_Forest_", metric_filename, ".png")),
+           metric_forest, width = 12, height = 6, dpi = 300)
+    
+    ggsave(file.path(forest_dir, paste0("Regional_Forest_", metric_filename, ".pdf")),
+           metric_forest, width = 12, height = 6)
+  }
+  
+  # ========================================================================
+  # PLOT 3: Forest plot showing only metrics significant in BOTH regions
+  # ========================================================================
+  cat("\nCreating forest plot for metrics significant in both regions...\n")
+  
+  # Find metrics present in both regions
+  metrics_both <- all_results %>%
+    group_by(Metric_Label, Lag_Label, HomeRangeSize, Threshold) %>%
+    summarise(n_regions = n_distinct(Region), .groups = "drop") %>%
+    filter(n_regions == 2)
+  
+  if (nrow(metrics_both) > 0) {
+    
+    both_data <- all_results %>%
+      semi_join(metrics_both, by = c("Metric_Label", "Lag_Label", 
+                                     "HomeRangeSize", "Threshold"))
+    
+    both_forest <- ggplot(both_data,
+                          aes(x = HomeRangeSize, y = Coefficient,
+                              color = Region, shape = Region)) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", alpha = 0.5) +
+      geom_point(position = position_dodge(width = 0.5), size = 3) +
+      geom_errorbar(aes(ymin = Coefficient - StdError,
+                        ymax = Coefficient + StdError),
+                    position = position_dodge(width = 0.5),
+                    width = 0.3,
+                    linewidth = 0.7) +
+      facet_wrap(~ Metric_Label + Lag_Label, scales = 'free', ncol = 4) +
+      scale_color_manual(values = c("Bransfield" = "#2166AC",
+                                    "Central_WAP" = "#B2182B")) +
+      scale_shape_manual(values = c("Bransfield" = 16,
+                                    "Central_WAP" = 17)) +
+      labs(title = "Metrics Significant in BOTH Regions",
+           subtitle = "Direct comparison of effect sizes where both regions show significance",
+           x = "Home Range Size",
+           y = "Effect Size (Coefficient ± SE)",
+           color = "Region",
+           shape = "Region") +
+      theme_minimal() +
+      theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(size = 11, hjust = 0.5),
+        strip.text = element_text(size = 9, face = "bold"),
+        legend.position = "bottom",
+        panel.grid.minor = element_blank()
+      )
+    
+    ggsave(file.path(forest_dir, "Regional_Forest_Both_Regions.png"),
+           both_forest, width = 14, height = 10, dpi = 300)
+    
+    ggsave(file.path(forest_dir, "Regional_Forest_Both_Regions.pdf"),
+           both_forest, width = 14, height = 10)
+    
+    cat("  Saved: Regional_Forest_Both_Regions.png/pdf\n")
+  } else {
+    cat("  No metrics significant in both regions\n")
+  }
+  
+  # ========================================================================
+  # PLOT 4: Simplified forest plot by Lag only (averaged across home ranges)
+  # ========================================================================
+  cat("\nCreating simplified forest plot (averaged by lag)...\n")
+  
+  lag_summary <- all_results %>%
+    group_by(Region, Metric_Label, Lag_Label) %>%
+    summarise(
+      Mean_Coefficient = mean(Coefficient, na.rm = TRUE),
+      SE_Coefficient = sqrt(mean(StdError^2, na.rm = TRUE)),  # Pool SEs
+      N_Models = n(),
+      .groups = "drop"
+    )
+  
+  lag_forest <- ggplot(lag_summary,
+                       aes(x = Lag_Label, y = Mean_Coefficient,
+                           color = Region, shape = Region)) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "gray50", alpha = 0.5) +
+    geom_point(position = position_dodge(width = 0.5), size = 3.5) +
+    geom_errorbar(aes(ymin = Mean_Coefficient - SE_Coefficient,
+                      ymax = Mean_Coefficient + SE_Coefficient),
+                  position = position_dodge(width = 0.5),
+                  width = 0.3,
+                  linewidth = 0.8) +
+    facet_wrap(~ Metric_Label, scales = 'free_y', ncol = 4) +
+    scale_color_manual(values = c("Bransfield" = "#2166AC",
+                                  "Central_WAP" = "#B2182B")) +
+    scale_shape_manual(values = c("Bransfield" = 16,
+                                  "Central_WAP" = 17)) +
+    labs(title = "Regional Comparison: Average Effect Sizes by Lag",
+         subtitle = "Mean coefficients across all home ranges",
+         x = "Lag Period",
+         y = "Mean Effect Size (Coefficient ± SE)",
+         color = "Region",
+         shape = "Region") +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+      plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 11, hjust = 0.5),
+      strip.text = element_text(size = 10, face = "bold"),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank()
+    )
+  
+  ggsave(file.path(forest_dir, "Regional_Forest_Simplified_by_Lag.png"),
+         lag_forest, width = 14, height = 8, dpi = 300)
+  
+  ggsave(file.path(forest_dir, "Regional_Forest_Simplified_by_Lag.pdf"),
+         lag_forest, width = 14, height = 8)
+  
+  cat("  Saved: Regional_Forest_Simplified_by_Lag.png/pdf\n")
+  
+  cat("\n", rep("=", 70), "\n")
+  cat("FOREST PLOT GENERATION COMPLETE\n")
+  cat(rep("=", 70), "\n")
+  
+  return(all_results)
 }
 
-# Combine all dataframes into one, filling missing columns with NA
-combined_results_df <- bind_rows(dfs)
+forest_results <- create_regional_forest_plots(results_path)
 
-# Define the output file path
-output_file <- file.path(results_dir, "combined_significant_results.csv")
 
-# Export the combined results to a new CSV file
-write_csv(combined_results_df, output_file)
+# Create summary table (wrapped in tryCatch)
+tryCatch({
+  regional_comparison <- create_regional_comparison_table(results_path)
+  
+  cat("\n\n")
+  cat(rep("=", 70), "\n")
+  cat("REGIONAL ANALYSIS WORKFLOW COMPLETE!\n")
+  cat(rep("=", 70), "\n")
+  cat("\nOutputs saved in:", results_path, "\n")
+  cat("  - Bransfield/: Results for South Shetland Islands region\n")
+  cat("  - Central_WAP/: Results for Gerlache Strait/Anvers region\n")
+  cat("  - Comparison_Plots/: Side-by-side visualizations\n")
+  cat("  - Regional_Comparison_Summary.csv: Statistical comparison table\n")
+}, error = function(e) {
+  cat("\nError creating summary table:", e$message, "\n")
+  cat("\nPartial results may still be available in regional subdirectories.\n")
+})
 
-# Print a message indicating the completion of the process
-cat("Combined results have been saved to:", output_file, "\n")
 
 
 ```
 
 
+
+
+
+**RUN: SOUTHERN OSCILLATION INDEX MIXED EFFECT MODEL**
 
 ```{r updated mixed effect  model}
 ###############################################################################
-# Enhanced SOI Analysis for Gentoo Penguins - Nature-Quality Figures
+# SOI Analysis for Gentoo Penguins
 ###############################################################################
 library(httr)       # for GET()
 library(dplyr)
