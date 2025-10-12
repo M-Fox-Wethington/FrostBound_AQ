@@ -78,7 +78,7 @@ fit_gls_models_indiv <- function(penguin_data, metric_yearly, metric_name) {
     
     if (nrow(penguin_lagged) < 3) next
     
-    cat(sprintf("    Fitting GLS model for lag %d year(s)\n", lag))
+    cat(sprintf("    Fitting GLS model for lag %d year(s)/n", lag))
     
     formula <- as.formula("growth_rate ~ metric_value")
     model <- gls(formula, correlation = corAR1(form = ~1 | site_id), data = penguin_lagged)
@@ -181,9 +181,9 @@ run_regional_gls_analysis <- function(penguin_abundance_data,
   # LOOP THROUGH EACH REGION
   for (region_name in regions) {
     
-    cat("\n", rep("=", 70), "\n")
-    cat(sprintf("ANALYZING REGION: %s\n", region_name))
-    cat(rep("=", 70), "\n\n")
+    cat("/n", rep("=", 70), "/n")
+    cat(sprintf("ANALYZING REGION: %s/n", region_name))
+    cat(rep("=", 70), "/n/n")
     
     # Create region-specific directory
     region_dir <- file.path(results_dir, region_name)
@@ -193,15 +193,15 @@ run_regional_gls_analysis <- function(penguin_abundance_data,
     penguin_data_region <- penguin_data_full %>%
       filter(region == region_name)
     
-    cat(sprintf("  N colonies in %s: %d\n", region_name, n_distinct(penguin_data_region$site_id)))
-    cat(sprintf("  N observations in %s: %d\n\n", region_name, nrow(penguin_data_region)))
+    cat(sprintf("  N colonies in %s: %d/n", region_name, n_distinct(penguin_data_region$site_id)))
+    cat(sprintf("  N observations in %s: %d/n/n", region_name, nrow(penguin_data_region)))
     
     # Initialize results storage
     all_results_list <- list()
     
     # LOOP THROUGH EACH METRIC FILE
     for (f in metric_files) {
-      cat(sprintf("\nProcessing file: %s\n", basename(f)))
+      cat(sprintf("/nProcessing file: %s/n", basename(f)))
       
       dat <- fread(f)
       
@@ -216,7 +216,7 @@ run_regional_gls_analysis <- function(penguin_abundance_data,
         next
       }
       
-      cat(sprintf("  Found metrics: %s\n", paste(metric_cols, collapse = ", ")))
+      cat(sprintf("  Found metrics: %s/n", paste(metric_cols, collapse = ", ")))
       
       home_sizes <- sort(unique(dat$HomeRangeSize))
       thresholds <- sort(unique(dat$Threshold))
@@ -228,7 +228,7 @@ run_regional_gls_analysis <- function(penguin_abundance_data,
           df_ht <- dat %>% filter(HomeRangeSize == h, is.na(Threshold) | Threshold == th)
           if (nrow(df_ht) == 0) next
           
-          cat(sprintf("  HomeRange: %s, Threshold: %s\n", h, as.character(th)))
+          cat(sprintf("  HomeRange: %s, Threshold: %s/n", h, as.character(th)))
           
           # LOOP THROUGH EACH METRIC COLUMN
           for (metric_col in metric_cols) {
@@ -245,7 +245,7 @@ run_regional_gls_analysis <- function(penguin_abundance_data,
               TRUE                              ~ metric_col
             )
             
-            cat(sprintf("    Metric: %s (%s)\n", metric_name, metric_col))
+            cat(sprintf("    Metric: %s (%s)/n", metric_name, metric_col))
             
             # Build yearly time series for this metric
             d_year <- tryCatch(
@@ -305,7 +305,7 @@ run_regional_gls_analysis <- function(penguin_abundance_data,
       write.csv(all_results_df, 
                 file.path(region_dir, "model_results_all_metrics.csv"), 
                 row.names = FALSE)
-      cat(sprintf("\nSaved all results: %s\n", 
+      cat(sprintf("/nSaved all results: %s/n", 
                   file.path(region_dir, "model_results_all_metrics.csv")))
       
       # Save significant results
@@ -316,17 +316,17 @@ run_regional_gls_analysis <- function(penguin_abundance_data,
         write.csv(significant_results, 
                   file.path(region_dir, "model_results_significant.csv"), 
                   row.names = FALSE)
-        cat(sprintf("Saved significant results: %s\n", 
+        cat(sprintf("Saved significant results: %s/n", 
                     file.path(region_dir, "model_results_significant.csv")))
       } else {
-        cat(sprintf("No significant results for %s\n", region_name))
+        cat(sprintf("No significant results for %s/n", region_name))
       }
     }
   }
   
-  cat("\n", rep("=", 70), "\n")
-  cat("REGIONAL ANALYSIS COMPLETE\n")
-  cat(rep("=", 70), "\n")
+  cat("/n", rep("=", 70), "/n")
+  cat("REGIONAL ANALYSIS COMPLETE/n")
+  cat(rep("=", 70), "/n")
 }
 
 # ============================================================================
@@ -334,14 +334,13 @@ run_regional_gls_analysis <- function(penguin_abundance_data,
 # ============================================================================
 
 # Define file paths
-penguin_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/modeled_gentoo_parameters.csv"
+penguin_path <-"C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/data/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv"
 
 metric_files <- c(
-  "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/metric-calculation-csv/daily_sic_statistics.csv",
-  "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/metric-calculation-csv/sea_ice_duration_persistence_stats.csv"
-)
+  "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/data/gentoo-abundance-model/metric-calculation-csv/daily_sic_statistics.csv",
+  "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/data/gentoo-abundance-model/metric-calculation-csv/sea_ice_duration_persistence_stats.csv")
 
-results_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/RStudioProject/Results/Regional_Analysis"
+results_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/results"
 
 # Load penguin data
 penguin_data <- fread(penguin_path)
@@ -373,9 +372,9 @@ create_regional_comparison_plots <- function(results_dir,
                                              metric_files,
                                              central_cutoff_lat = -63.2) {
   
-  cat("\n", rep("=", 70), "\n")
-  cat("CREATING REGIONAL COMPARISON PLOTS\n")
-  cat(rep("=", 70), "\n\n")
+  cat("/n", rep("=", 70), "/n")
+  cat("CREATING REGIONAL COMPARISON PLOTS/n")
+  cat(rep("=", 70), "/n/n")
   
   # Load penguin data
   penguin_full <- fread(penguin_data_path)
@@ -396,7 +395,7 @@ create_regional_comparison_plots <- function(results_dir,
   central_sig_path <- file.path(results_dir, "Central_WAP", "model_results_significant.csv")
   
   if (!file.exists(brans_sig_path) & !file.exists(central_sig_path)) {
-    cat("No significant results found for either region. Skipping plots.\n")
+    cat("No significant results found for either region. Skipping plots./n")
     return(NULL)
   }
   
@@ -421,7 +420,7 @@ create_regional_comparison_plots <- function(results_dir,
     distinct() %>%
     arrange(Metric, Lag)
   
-  cat(sprintf("Found %d unique significant metric combinations\n", nrow(all_combos)))
+  cat(sprintf("Found %d unique significant metric combinations/n", nrow(all_combos)))
   
   # Load all metric data
   metric_data_list <- lapply(metric_files, function(f) {
@@ -434,7 +433,7 @@ create_regional_comparison_plots <- function(results_dir,
   for (i in 1:nrow(all_combos)) {
     combo <- all_combos[i, ]
     
-    cat(sprintf("\nPlot %d/%d: %s, HR=%s, Threshold=%s, Lag=%d\n",
+    cat(sprintf("/nPlot %d/%d: %s, HR=%s, Threshold=%s, Lag=%d/n",
                 i, nrow(all_combos), combo$Metric, combo$HomeRangeSize, 
                 combo$Threshold, combo$Lag))
     
@@ -451,7 +450,7 @@ create_regional_comparison_plots <- function(results_dir,
                Lag == combo$Lag)
       
       if (nrow(region_result) == 0) {
-        cat(sprintf("  Skipping %s (not significant)\n", region_name))
+        cat(sprintf("  Skipping %s (not significant)/n", region_name))
         next
       }
       
@@ -478,13 +477,13 @@ create_regional_comparison_plots <- function(results_dir,
         filter(!is.na(metric_value), !is.na(growth_rate))
       
       if (nrow(penguin_region) == 0) {
-        cat(sprintf("  No data available for %s after merging\n", region_name))
+        cat(sprintf("  No data available for %s after merging/n", region_name))
         next
       }
       
       # Check for sufficient variation in metric
       if (sd(penguin_region$metric_value, na.rm = TRUE) == 0) {
-        cat(sprintf("  No variation in metric for %s, skipping\n", region_name))
+        cat(sprintf("  No variation in metric for %s, skipping/n", region_name))
         next
       }
       
@@ -504,7 +503,7 @@ create_regional_comparison_plots <- function(results_dir,
       )
       
       if (is.null(conf_int)) {
-        cat(sprintf("  Skipping plot for %s (confidence interval error)\n", region_name))
+        cat(sprintf("  Skipping plot for %s (confidence interval error)/n", region_name))
         next
       }
       
@@ -578,16 +577,16 @@ create_regional_comparison_plots <- function(results_dir,
                  height = 5,
                  dpi = 300)
         })
-        cat(sprintf("  Saved: %s\n", plot_filename))
+        cat(sprintf("  Saved: %s/n", plot_filename))
       }, error = function(e) {
         warning(sprintf("Could not save plot %s: %s", plot_filename, e$message))
       })
     }
   }
   
-  cat("\n", rep("=", 70), "\n")
-  cat("PLOT GENERATION COMPLETE\n")
-  cat(rep("=", 70), "\n")
+  cat("/n", rep("=", 70), "/n")
+  cat("PLOT GENERATION COMPLETE/n")
+  cat(rep("=", 70), "/n")
 }
 
 # Run visualization (wrapped in tryCatch to handle errors gracefully)
@@ -599,8 +598,8 @@ tryCatch({
     central_cutoff_lat = -63.2
   )
 }, error = function(e) {
-  cat("\nError during plot generation:", e$message, "\n")
-  cat("Continuing with summary table...\n")
+  cat("/nError during plot generation:", e$message, "/n")
+  cat("Continuing with summary table.../n")
 })
 
 # ============================================================================
@@ -609,9 +608,9 @@ tryCatch({
 
 create_regional_comparison_table <- function(results_dir) {
   
-  cat("\n", rep("=", 70), "\n")
-  cat("CREATING REGIONAL COMPARISON SUMMARY TABLE\n")
-  cat(rep("=", 70), "\n\n")
+  cat("/n", rep("=", 70), "/n")
+  cat("CREATING REGIONAL COMPARISON SUMMARY TABLE/n")
+  cat(rep("=", 70), "/n/n")
   
   # Load significant results from both regions
   brans_sig_path <- file.path(results_dir, "Bransfield", "model_results_significant.csv")
@@ -628,7 +627,7 @@ create_regional_comparison_table <- function(results_dir) {
   }
   
   if (length(results_list) == 0) {
-    cat("No significant results found. Cannot create comparison table.\n")
+    cat("No significant results found. Cannot create comparison table./n")
     return(NULL)
   }
   
@@ -655,10 +654,10 @@ create_regional_comparison_table <- function(results_dir) {
             file.path(results_dir, "Regional_Comparison_Summary.csv"),
             row.names = FALSE)
   
-  cat("Saved summary table: Regional_Comparison_Summary.csv\n")
+  cat("Saved summary table: Regional_Comparison_Summary.csv/n")
   
   # Print key comparisons
-  cat("\n=== KEY COMPARISONS ===\n")
+  cat("/n=== KEY COMPARISONS ===/n")
   
   # For each metric, show if both regions have significant effects
   metrics_in_both <- comparison %>%
@@ -667,9 +666,9 @@ create_regional_comparison_table <- function(results_dir) {
     ungroup()
   
   if (nrow(metrics_in_both) > 0) {
-    cat("\nMetrics significant in BOTH regions:\n")
+    cat("/nMetrics significant in BOTH regions:/n")
     for (met in unique(metrics_in_both$Metric)) {
-      cat(sprintf("\n%s:\n", met))
+      cat(sprintf("/n%s:/n", met))
       subset_met <- metrics_in_both %>% filter(Metric == met)
       print(subset_met %>% select(Region, Lag, Mean_Coefficient, Min_pValue, Mean_N_Colonies))
     }
@@ -682,11 +681,11 @@ create_regional_comparison_table <- function(results_dir) {
     ungroup()
   
   if (nrow(metrics_single) > 0) {
-    cat("\n\nMetrics significant in ONLY ONE region:\n")
+    cat("/n/nMetrics significant in ONLY ONE region:/n")
     print(metrics_single %>% select(Region, Metric, Lag, Mean_Coefficient, Min_pValue))
   }
   
-  cat("\n", rep("=", 70), "\n")
+  cat("/n", rep("=", 70), "/n")
   
   return(comparison)
 }
@@ -697,9 +696,9 @@ create_regional_comparison_table <- function(results_dir) {
 
 create_regional_forest_plots <- function(results_dir) {
   
-  cat("\n", rep("=", 70), "\n")
-  cat("CREATING REGIONAL COMPARISON FOREST PLOTS\n")
-  cat(rep("=", 70), "\n\n")
+  cat("/n", rep("=", 70), "/n")
+  cat("CREATING REGIONAL COMPARISON FOREST PLOTS/n")
+  cat(rep("=", 70), "/n/n")
   
   # Load significant results from both regions
   brans_sig_path <- file.path(results_dir, "Bransfield", "model_results_significant.csv")
@@ -716,7 +715,7 @@ create_regional_forest_plots <- function(results_dir) {
   }
   
   if (length(results_list) == 0) {
-    cat("No significant results found. Cannot create forest plots.\n")
+    cat("No significant results found. Cannot create forest plots./n")
     return(NULL)
   }
   
@@ -748,7 +747,7 @@ create_regional_forest_plots <- function(results_dir) {
   # ========================================================================
   # PLOT 1: Combined forest plot for all metrics (faceted by metric)
   # ========================================================================
-  cat("\nCreating combined forest plot across all metrics...\n")
+  cat("/nCreating combined forest plot across all metrics.../n")
   
   combined_forest <- ggplot(all_results, 
                             aes(x = HomeRangeSize, y = Coefficient, 
@@ -789,12 +788,12 @@ create_regional_forest_plots <- function(results_dir) {
   ggsave(file.path(forest_dir, "Regional_Comparison_Combined_Forest_Plot.pdf"),
          combined_forest, width = 18, height = 12)
   
-  cat("  Saved: Regional_Comparison_Combined_Forest_Plot.png/pdf\n")
+  cat("  Saved: Regional_Comparison_Combined_Forest_Plot.png/pdf/n")
   
   # ========================================================================
   # PLOT 2: Individual forest plots for each metric
   # ========================================================================
-  cat("\nCreating individual forest plots for each metric...\n")
+  cat("/nCreating individual forest plots for each metric.../n")
   
   unique_metrics <- unique(all_results$Metric_Label)
   
@@ -804,7 +803,7 @@ create_regional_forest_plots <- function(results_dir) {
     
     if (nrow(metric_data) == 0) next
     
-    cat(sprintf("  Creating plot for: %s\n", metric))
+    cat(sprintf("  Creating plot for: %s/n", metric))
     
     metric_forest <- ggplot(metric_data,
                             aes(x = HomeRangeSize, y = Coefficient,
@@ -849,7 +848,7 @@ create_regional_forest_plots <- function(results_dir) {
   # ========================================================================
   # PLOT 3: Forest plot showing only metrics significant in BOTH regions
   # ========================================================================
-  cat("\nCreating forest plot for metrics significant in both regions...\n")
+  cat("/nCreating forest plot for metrics significant in both regions.../n")
   
   # Find metrics present in both regions
   metrics_both <- all_results %>%
@@ -900,15 +899,15 @@ create_regional_forest_plots <- function(results_dir) {
     ggsave(file.path(forest_dir, "Regional_Forest_Both_Regions.pdf"),
            both_forest, width = 14, height = 10)
     
-    cat("  Saved: Regional_Forest_Both_Regions.png/pdf\n")
+    cat("  Saved: Regional_Forest_Both_Regions.png/pdf/n")
   } else {
-    cat("  No metrics significant in both regions\n")
+    cat("  No metrics significant in both regions/n")
   }
   
   # ========================================================================
   # PLOT 4: Simplified forest plot by Lag only (averaged across home ranges)
   # ========================================================================
-  cat("\nCreating simplified forest plot (averaged by lag)...\n")
+  cat("/nCreating simplified forest plot (averaged by lag).../n")
   
   lag_summary <- all_results %>%
     group_by(Region, Metric_Label, Lag_Label) %>%
@@ -956,11 +955,11 @@ create_regional_forest_plots <- function(results_dir) {
   ggsave(file.path(forest_dir, "Regional_Forest_Simplified_by_Lag.pdf"),
          lag_forest, width = 14, height = 8)
   
-  cat("  Saved: Regional_Forest_Simplified_by_Lag.png/pdf\n")
+  cat("  Saved: Regional_Forest_Simplified_by_Lag.png/pdf/n")
   
-  cat("\n", rep("=", 70), "\n")
-  cat("FOREST PLOT GENERATION COMPLETE\n")
-  cat(rep("=", 70), "\n")
+  cat("/n", rep("=", 70), "/n")
+  cat("FOREST PLOT GENERATION COMPLETE/n")
+  cat(rep("=", 70), "/n")
   
   return(all_results)
 }
@@ -972,18 +971,18 @@ forest_results <- create_regional_forest_plots(results_path)
 tryCatch({
   regional_comparison <- create_regional_comparison_table(results_path)
   
-  cat("\n\n")
-  cat(rep("=", 70), "\n")
-  cat("REGIONAL ANALYSIS WORKFLOW COMPLETE!\n")
-  cat(rep("=", 70), "\n")
-  cat("\nOutputs saved in:", results_path, "\n")
-  cat("  - Bransfield/: Results for South Shetland Islands region\n")
-  cat("  - Central_WAP/: Results for Gerlache Strait/Anvers region\n")
-  cat("  - Comparison_Plots/: Side-by-side visualizations\n")
-  cat("  - Regional_Comparison_Summary.csv: Statistical comparison table\n")
+  cat("/n/n")
+  cat(rep("=", 70), "/n")
+  cat("REGIONAL ANALYSIS WORKFLOW COMPLETE!/n")
+  cat(rep("=", 70), "/n")
+  cat("/nOutputs saved in:", results_path, "/n")
+  cat("  - Bransfield/: Results for South Shetland Islands region/n")
+  cat("  - Central_WAP/: Results for Gerlache Strait/Anvers region/n")
+  cat("  - Comparison_Plots/: Side-by-side visualizations/n")
+  cat("  - Regional_Comparison_Summary.csv: Statistical comparison table/n")
 }, error = function(e) {
-  cat("\nError creating summary table:", e$message, "\n")
-  cat("\nPartial results may still be available in regional subdirectories.\n")
+  cat("/nError creating summary table:", e$message, "/n")
+  cat("/nPartial results may still be available in regional subdirectories./n")
 })
 
 
