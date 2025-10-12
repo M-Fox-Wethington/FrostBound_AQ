@@ -1,0 +1,441 @@
+---
+title: "AMSR and NSIDC Sea Ice Index Dataset Comparison"
+author: "Michael Wethington"
+date: "2024-05-12"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## **Step 1: Data Preparation**
+
+Load the raster stacks representing month-by-month averages of sea ice concentration. This should load 2 stacks with 47 month layers of data each
+
+```{r Data Loading, include=FALSE}
+library(terra)
+library(lubridate)
+library(lmtest)
+library(gvlma)
+
+## Load your raster stacks
+amsr_monthly <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/stack/substack/AMSR-Unified_harmonization_winter_monthly_mean_extent.nc")
+
+nsidc_monthly <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/stack/substack/25km_Sea-Ice-Index_harmonization_winter_monthly_mean_extent.nc")
+
+
+```
+
+
+## **Step 2: RMSE Calculation**
+
+### Process: 
+The RMSE is calculated by first applying a threshold to remove sea ice concentration values below 15, considered less meaningful for analysis. This is done to focus on significant ice concentrations, enhancing the reliability of the error metric. The squared differences between corresponding pixels of AMSR and NSIDC monthly data are computed, summed, and averaged across all valid data points, and the square root of this mean squared error is then calculated to produce the RMSE for each pixel.
+
+### Interpretation: 
+The RMSE provides a measure of the average magnitude of the errors between AMSR and NSIDC's reported ice concentrations. Unlike simple difference calculations, RMSE squares the differences, thus penalizing larger errors more severely, which provides a more sensitive and accurate measure of prediction error. In this dataset:
+
+### Results:
+
+Average RMSE of 22.12 and Median RMSE of 23.62  (moderate level of discrepancy between the two datasets across all measured points. This indicates variability in how each dataset estimates sea ice concentration, with neither consistently overestimating nor underestimating across all regions or times.
+```{r RMSE Calculation}
+
+# Apply the threshold to remove values from 0 to 15
+threshold <- function(x) {
+  x[x <= 15] <- NA
+  return(x)
+}
+
+amsr_monthly <- app(amsr_monthly, threshold)
+nsidc_monthly <- app(nsidc_monthly, threshold)
+
+# Compute squared differences for each cell across all layers
+squared_diffs <- (amsr_monthly - nsidc_monthly)^2
+
+# Function to calculate RMSE across layers
+calc_rmse <- function(x) {
+  n <- sum(!is.na(x))
+  if (n > 0) {
+    mse <- sum(x, na.rm = TRUE) / n
+    return(sqrt(mse))
+  } else {
+    return(NA)
+  }
+}
+
+# Apply the RMSE function across all cells
+cell_rmse <- app(squared_diffs, calc_rmse)
+
+# Plot the cell-level RMSE raster
+plot(cell_rmse, main="Cell-level RMSE - Monthly Averages", colNA="blue")
+
+# Calculate and print the average and median RMSE
+average_rmse <- mean(values(cell_rmse), na.rm = TRUE)
+median_rmse <- median(values(cell_rmse), na.rm = TRUE)
+
+# Print the results
+print(paste("Average RMSE: ", average_rmse))
+print(paste("Median RMSE: ", median_rmse))
+```
+
+
+
+## **Step 3: Exploratory Statistics**
+
+```{r Exploratory Stats}
+library(terra)  # Load the terra package for raster manipulation
+
+# Compute the mean differences between the monthly average rasters of AMSR and NSIDC
+mean_diff <- amsr_monthly - nsidc_monthly
+
+# Compute global statistics for the mean differences
+stats <- global(mean_diff, c('mean', 'sd', 'min', 'max'), na.rm = TRUE)
+# print(stats)
+
+# Access and print specific statistics:
+mean_diff_value <- stats[['mean']]
+sd_diff_value <- stats[['sd']]
+min_diff_value <- stats[['min']]
+max_diff_value <- stats[['max']]
+
+cat("Mean Difference: ", mean_diff_value, "\n")
+cat("Standard Deviation of Difference: ", sd_diff_value, "\n")
+cat("Minimum Difference: ", min_diff_value, "\n")
+cat("Maximum Difference: ", max_diff_value, "\n")
+
+# For visual interpretation, plot the histogram of the differences
+# Extract non-NA values from the mean_diff raster for the histogram
+diff_values <- values(mean_diff)
+diff_values <- na.omit(diff_values)  # Remove NA values for histogram
+hist(diff_values, breaks=50, main="Histogram of Differences", xlab="Difference (AMSR - NSIDC)", col="gray")
+
+```
+
+## **Step 4: Skewness and Kurtosis**
+
+**Skewness (0.18):** This positive skewness value indicates that the distribution of the mean differences (AMSR - NSIDC) has a slightly longer tail on the right side of the mean than on the left. This suggests that there are more instances where AMSR reports higher sea ice concentrations compared to NSIDC. While the skewness is positive, it is relatively low, indicating that the distribution is not heavily skewed and the majority of differences are clustered near the mean.
+
+**Kurtosis (0.13):** The low positive kurtosis value suggests a platykurtic distribution. This distribution is flatter than a normal distribution, which typically has a kurtosis of 3 (excess kurtosis of 0). The flatter peak and lighter tails indicate that there are fewer extreme outliers in the differences between AMSR and NSIDC. This characteristic suggests that discrepancies between the datasets, while present, tend to be moderate and do not often reach extreme levels.
+
+
+```{r Skewness and Kurtosis}
+library(e1071)
+
+# each layer is monthly data
+# Compute monthly differences
+difference <- amsr_monthly - nsidc_monthly
+
+# Apply a function across all layers to calculate skewness and kurtosis for each pixel
+skewness_raster <- app(difference, fun = function(x) skewness(x, na.rm = TRUE))
+kurtosis_raster <- app(difference, fun = function(x) kurtosis(x, na.rm = TRUE))
+
+# Optional: Visualize skewness and kurtosis rasters
+plot(skewness_raster, main = "Skewness of Monthly SIC Differences")
+plot(kurtosis_raster, main = "Kurtosis of Monthly SIC Differences")
+
+# Calculate overall skewness and kurtosis across the entire dataset if needed
+overall_skewness <- mean(values(skewness_raster), na.rm = TRUE)
+overall_kurtosis <- mean(values(kurtosis_raster), na.rm = TRUE)
+
+# Print overall skewness and kurtosis
+print(paste("Overall Skewness: ", overall_skewness))
+print(paste("Overall Kurtosis: ", overall_kurtosis))
+
+
+```
+
+## **Step 5: Basic Linear Regression Analysis**
+
+
+#### **Intercept (3.4845419)**: This coefficient represents the baseline level of AMSR sea ice concentration when NSIDC sea ice concentration is zero. This positive intercept might indicate a base level bias in how AMSR data records sea ice compared to NSIDC under low sea ice conditions.
+
+####**Slope (1.1350290)**: The coefficient for NSIDC indicates that for every one unit increase in NSIDC sea ice concentration, AMSR sea ice concentration increases by approximately 1.135 units. This slope greater than one suggests that AMSR tends to record slightly higher concentrations than NSIDC as concentrations increase.
+
+###**Statistical Significance and Model Fit**
+
+#### Standard Error of Slope (0.0002416): This very low standard error reflects high precision in the estimation of the slope, contributing to the very high t-value.
+
+#### t-values: The t-values are extremely high for both the intercept and the slope, indicating very strong statistical significance.
+
+#### P-values: Effectively zero for both coefficients, confirming their statistical significance beyond typical thresholds.
+
+#### Residual Standard Error (9.279): This value tells us the standard deviation of the residuals, which measures the typical difference between the observed AMSR values and those predicted by the model. Given the scale of sea ice concentration measurements (0 to 100%), this error might be considered reasonable, but it still indicates variability that the model doesn't capture.
+
+#### R-squared (0.9598): This is a measure of the proportion of variance in the AMSR dataset that is predictable from the NSIDC dataset. A value close to 1 indicates that the model explains a very high proportion of the variance.
+
+```{r Linear Regression Analyis}
+
+# Make sure rasters are compatible
+if (!compareGeom(amsr_monthly, nsidc_monthly)) {
+  stop("Rasters are not aligned")
+}
+
+# Convert rasters to vectors
+amsr_values <- values(amsr_monthly)
+nsidc_values <- values(nsidc_monthly)
+
+# Create a combined data frame (each row corresponds to a pixel across all layers)
+combined_df <- data.frame(AMSR = as.vector(amsr_values), NSIDC = as.vector(nsidc_values))
+
+# Remove NA values to ensure clean regression analysis
+clean_df <- na.omit(combined_df)
+
+# Perform linear regression using the clean data
+model <- lm(AMSR ~ NSIDC, data = clean_df)
+summary(model)
+
+
+# Plot NSIDC vs AMSR values
+plot(clean_df$NSIDC, clean_df$AMSR, main="Scatter Plot of AMSR vs NSIDC", xlab="NSIDC", ylab="AMSR",
+     pch=19, col="blue")  # Ensure this runs without error
+
+# Add regression line
+abline(model, col="red")
+
+
+```
+
+
+## **Test for heteroscedasticity**
+
+### **Breusch-Pagan Test Results**
+
+BP Statistic (46760): This is the test statistic for the Breusch-Pagan test. It's quite large, indicating a significant result.
+
+Degrees of Freedom (1): This reflects the number of predictors in your model plus one. Since your model includes only one predictor (NSIDC), the degrees of freedom are correctly specified as one.
+
+p-value (< 2.2e-16): This extremely small p-value indicates that the probability of seeing such a large value of the BP statistic under the null hypothesis (that there is no heteroscedasticity) is effectively zero.
+
+### Interpretation
+
+The test results strongly suggest the presence of heteroscedasticity in the residuals of our linear regression model. Heteroscedasticity occurs when the variance of the residuals is not constant across all levels of the independent variable(s). In the context of the model, this means that the variability in how AMSR measurements relate to NSIDC measurements changes across different values of sea ice concentration.
+
+### Implications
+
+Heteroscedasticity can undermine the validity of standard statistical tests by violating one of the key assumptions of ordinary least squares (OLS) (bahhh what's new???) regression—that the error terms have constant variance at all levels of the independent variable:
+
+Confidence Intervals and Hypothesis Tests: The standard errors associated with your regression coefficients may be biased, leading to unreliable confidence intervals and hypothesis tests.
+  
+Model Accuracy: Variability in prediction errors across different values of NSIDC may lead to less accurate predictions at certain levels.
+
+### Potential Solutions
+
+**Transformations:**Applying a transformation to the dependent variable (e.g., a logarithmic transformation) might help stabilize the variance of the residuals.
+
+**Weighted Least Squares**: Since you already have variance estimates, using weighted least squares (WLS) regression where weights are the inverse of the estimated variances could correct for heteroscedasticity.
+
+**Robust Standard Errors**: Using robust standard errors in your regression can adjust for heteroscedasticity without altering the regression model itself.
+
+
+
+```{r Test for Heteroscedasticity}
+
+
+# Run the Breusch-Pagan test
+bp_test_result <- bptest(model)
+print(bp_test_result)
+
+```
+Weighted Least Squares (WLS)
+
+Implemented to counter heteroscedasticity by weighting the observations inversely proportional to their variance. 
+
+```{r Weighted Regression}
+
+library(terra)
+library(ggplot2)
+
+# Load your raster stacks
+amsr_monthly <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/12km_AMSR-Unified/stack/substack/AMSR-Unified_harmonization_winter_monthly_mean_extent.nc")
+nsidc_monthly <- rast("D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/25km_Sea-Ice-Index/stack/substack/25km_Sea-Ice-Index_harmonization_winter_monthly_mean_extent.nc")
+
+# Make sure rasters are compatible
+if (!compareGeom(amsr_monthly, nsidc_monthly)) {
+  stop("Rasters are not aligned")
+}
+
+# Compute squared differences as an approximation of variance
+squared_diffs <- (amsr_monthly - nsidc_monthly)^2
+weights <- 1 / (squared_diffs + 1e-10)  # Adding a small constant to avoid division by zero
+
+# Convert rasters to vectors
+amsr_values <- values(amsr_monthly)
+nsidc_values <- values(nsidc_monthly)
+weights <- values(weights)
+
+# Create a combined data frame (each row corresponds to a pixel across all layers)
+combined_df <- data.frame(AMSR = as.vector(amsr_values), NSIDC = as.vector(nsidc_values), Weights = as.vector(weights))
+
+# Remove NA values to ensure clean regression analysis
+clean_df <- na.omit(combined_df)
+
+# Perform weighted linear regression using the clean data
+model_wls <- lm(AMSR ~ NSIDC, data = clean_df, weights = Weights)
+summary(model_wls)
+
+# Plotting differences and weights
+plot(squared_diffs[[1]], main="Squared Differences - First Month")
+plot(weights[[1]], main="Weights - First Month")
+
+
+# Scatter plot with ggplot2
+ggplot(clean_df, aes(x=NSIDC, y=AMSR)) +
+  geom_point(alpha=0.3) +
+  geom_smooth(method="lm", col="red") +
+  theme_minimal() +
+  labs(title="Scatter Plot of AMSR vs NSIDC", x="NSIDC", y="AMSR")
+
+
+# Run the Breusch-Pagan test
+bp_test_result <- bptest(model_wls)
+print(bp_test_result)
+
+```
+
+
+Step: Plotting the Residuals
+
+Plotting fitted values against residuals is a classic way to assess model diagnostics in regression analysis. It helps to identify patterns in the residuals that could indicate problems with the model such as non-linearity, heteroscedasticity, or outliers. Standardized residuals, on the other hand, are the residuals divided by their standard deviation, effectively normalizing them, which is particularly useful for identifying outliers.
+Fitted Values vs. Residuals
+
+This plot helps to check for homoscedasticity — that is, whether the residuals have constant variance across all levels of the independent variable(s). It can also reveal whether the relationship modeled is linear and whether there are any unusual data points.
+Fitted Values vs. Standardized Residuals
+
+Plotting against standardized residuals is useful because these are scaled to have unit variance, making them easier to interpret, especially when looking for outliers. A standardized residual greater than about 3 or less than -3 is typically considered to be an outlier.
+
+```{r}
+
+library(ggplot2)
+
+# Assuming 'model_wls' is your fitted weighted linear regression model
+fitted_values <- fitted(model_wls)
+residuals <- resid(model_wls)
+standardized_residuals <- rstandard(model_wls)
+
+# Create a data frame for plotting
+diagnostic_df <- data.frame(Fitted=fitted_values, Residuals=residuals, Standardized=standardized_residuals)
+
+# Plot Fitted vs. Residuals
+ggplot(diagnostic_df, aes(x=Fitted, y=Residuals)) +
+  geom_point() +
+  geom_hline(yintercept=0, linetype="dashed", color="red") +
+  labs(title="Fitted vs. Residuals", x="Fitted Values", y="Residuals") +
+  theme_minimal()
+
+# Plot Fitted vs. Standardized Residuals
+ggplot(diagnostic_df, aes(x=Fitted, y=Standardized)) +
+  geom_point() +
+  geom_hline(yintercept=0, linetype="dashed", color="red") +
+  labs(title="Fitted vs. Standardized Residuals", x="Fitted Values", y="Standardized Residuals") +
+  theme_minimal()
+
+
+```
+
+
+```{r}
+library(e1071)  # for skewness and kurtosis functions
+
+# Assuming 'model_wls' is your model
+residuals <- resid(model_wls)
+
+summary_stats <- summary(residuals)
+skewness_value <- skewness(residuals)
+kurtosis_value <- kurtosis(residuals)
+
+# Create a summary list
+residual_summary <- list(
+  Mean = mean(residuals),
+  Median = median(residuals),
+  Standard_Deviation = sd(residuals),
+  Skewness = skewness_value,
+  Kurtosis = kurtosis_value
+)
+
+library(car)  # for outlier tests and diagnostics
+
+# Calculate Cook's distance to identify influential cases
+cooks_distances <- cooks.distance(model_wls)
+
+# High leverage points
+hat_values <- hatvalues(model_wls)
+
+# Combine into a summary
+diagnostic_summary <- data.frame(
+  Cooks_Distance = cooks_distances,
+  Leverage = hat_values
+)
+
+library(car)  # for outlier tests and diagnostics
+
+# Calculate Cook's distance to identify influential cases
+cooks_distances <- cooks.distance(model_wls)
+
+# High leverage points
+hat_values <- hatvalues(model_wls)
+
+# Combine into a summary
+diagnostic_summary <- data.frame(
+  Cooks_Distance = cooks_distances,
+  Leverage = hat_values
+)
+
+
+library(ggplot2)
+
+# Basic Residual Plot
+ggplot(data = diagnostic_summary, aes(x = seq_along(Cooks_Distance), y = Cooks_Distance)) +
+  geom_line() +
+  labs(title = "Cooks Distance Plot", x = "Observation", y = "Cooks Distance")
+
+# You can include threshold lines or specific annotations based on the diagnostics
+
+
+full_summary <- list(
+  Residual_Summary = residual_summary,
+  Diagnostic_Summary = diagnostic_summary
+)
+
+# If you want to present this in a readable format
+print(full_summary)
+
+n <- nrow(clean_df)  # Total number of observations
+threshold <- 4 / n
+
+num_influential_cases <- sum(cooks_distances > threshold)
+
+proportion_influential <- num_influential_cases / n
+
+diagnostic_summary$Threshold_Cooks_Distance <- threshold
+diagnostic_summary$Num_Influential_Cases <- num_influential_cases
+diagnostic_summary$Proportion_Influential <- proportion_influential
+
+print(paste("Number of influential cases (Cook's Distance > ", threshold, "): ", num_influential_cases))
+print(paste("Proportion of influential cases: ", proportion_influential))
+
+```
+
+**Non-Weighted Linear Regression**
+
+Intercept and Slope: For the basic linear regression model The intercept is above zero (3.4845), and the NSIDC coefficient (slope) is greater than one (1.1350), suggesting a systematic adjustment is needed beyond a simple linear scaling.
+
+Fit Quality: High R-squared (0.9598) indicates a good fit but doesn't account for potential unequal variances across the range of data, which could mislead the correction factor especially if errors are not uniformly distributed. 
+
+**Weighted Linear Regression (WLS)**
+
+Intercept and Slope: The intercept is effectively zero, and the slope is exactly one under WLS, indicating that after weighting by the inverse of variance, NSIDC values predict AMSR values on a one-to-one basis. This suggests that once the heteroscedasticity is accounted for, the relationship between the datasets becomes directly proportional.
+
+Fit Quality: The perfect R-squared value (1.0) in WLS suggests a flawless model fit on the adjusted data, confirming the appropriateness of weights in balancing the dataset's inherent variance.
+
+**Implications for Correction Factor:**
+
+Correction Factor Formulation: The results from the WLS model suggest that any correction factor derived from this analysis would effectively align NSIDC data directly with AMSR data without needing further scaling or offset adjustments. The correction factor in this context could simply be the normalization or alignment of variance across the datasets.
+
+Model Reliability: Given the drastic improvement in fit and residuals' behavior in the WLS model, it’s evident that using a correction factor derived from this model may likely result in more reliable and consistent adjustments when applied to NSIDC data. This said, i'm highly skeptical over this and am more likely to think that we'll need something more nuanced that deals with geographically weighted correction factors but that is tbd. 
+
+Practical Application: For practical applications, ensure the correction factor is robust across different conditions and external validations. Given the perfect fit, further scrutiny into potential overfitting or the model's performance on an independent test set (if available) would be prudent before operational use.
+
+In summary, the weighted regression looks like it provides a more reliable basis for creating a correction factor due to its handling of inherent data variability, and the results indicate that minimal adjustments are needed when correcting NSIDC values to match AMSR data closely.

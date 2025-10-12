@@ -1,0 +1,13 @@
+# RStudio junk
+.Rproj.user/
+.Rhistory
+.RData
+
+# Keep all binary outputs out of Git
+*.pdf
+*.png
+*.rds
+*.rda
+
+# And the whole Results tree (generated outputs)
+Results/
