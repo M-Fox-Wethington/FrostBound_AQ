@@ -813,125 +813,6 @@ print(combined_plot)
 ```
 
 
-2. Calculating and Plotting Annual Differences Between Datasets
-Objective:
-
-    This script focuses on calculating the differences in sea ice extent between the NSIDC Harmonized dataset and the other two datasets (AMSR and NSIDC) over the years.
-
-Key Features:
-
-    Data Processing:
-        Similar to the first script, it loads and processes three raster datasets (AMSR, NSIDC, NSIDC Harmonized) and calculates sea ice extent for each time step.
-
-    Calculating Differences:
-        After processing each dataset, the script calculates the difference between the sea ice extent values of the NSIDC Harmonized dataset and the AMSR and NSIDC datasets:
-            Diff_AMSR = NSIDC_Harmonized - AMSR
-            Diff_NSIDC = NSIDC_Harmonized - NSIDC
-
-    Summary of Differences:
-        Computes the mean and standard deviation of the differences for both AMSR and NSIDC comparisons, summarizing how well the harmonized dataset aligns with the original datasets.
-
-    Visualization:
-        Plots the difference in sea ice extent between NSIDC Harmonized vs. AMSR and NSIDC Harmonized vs. NSIDC over the years.
-        Uses line plots to visualize the difference for each comparison, color-coded for clarity.
-        Combines the two plots into a vertical grid using patchwork.
-
-Output:
-
-    A vertical 2-plot grid showing the annual differences in sea ice extent between NSIDC Harmonized vs. AMSR and NSIDC Harmonized vs. NSIDC, highlighting the variability in the differences.
-
-```{r}
-
-# Load necessary libraries
-library(terra)
-library(dplyr)
-library(lubridate)
-library(ggplot2)
-library(patchwork)  # For combining plots
-
-# Define file paths for the raster datasets
-amsr_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif"
-nsidc_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_common_dates.tif"
-nsidc_harmonized_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_harmonized_common_dates.tif"
-
-# Load the raster datasets
-amsr_stack <- rast(amsr_path)
-nsidc_stack <- rast(nsidc_path)
-nsidc_harmonized_stack <- rast(nsidc_harmonized_path)
-
-# Extract the date information from the raster metadata
-amsr_dates <- as.Date(terra::time(amsr_stack), origin = "1970-01-01")
-nsidc_dates <- as.Date(terra::time(nsidc_stack), origin = "1970-01-01")
-nsidc_harmonized_dates <- as.Date(terra::time(nsidc_harmonized_stack), origin = "1970-01-01")
-
-# Calculate the area of one cell in square kilometers
-cell_area_sq_km <- prod(res(amsr_stack)) / 1e6
-
-# Function to calculate sea ice extent statistics
-calculate_layer_stats <- function(layer, date, cell_area_sq_km) {
-  valid_ice_cells <- global(layer, fun = function(x) sum(x >= 0.15, na.rm = TRUE))
-  total_ice_area_sq_km <- (valid_ice_cells * cell_area_sq_km)  # Total ice area in square kilometers
-  return(data.frame(ice_extent_km = total_ice_area_sq_km, date = date))
-}
-
-# Function to process the raster data and calculate statistics
-process_data <- function(raster, dates, cell_area_sq_km) {
-  sea_ice_stats <- lapply(1:nlyr(raster), function(i) {
-    calculate_layer_stats(raster[[i]], dates[i], cell_area_sq_km)
-  })
-  sea_ice_stats_df <- do.call(rbind, sea_ice_stats) %>%
-    mutate(Date = as.Date(date), Year = year(Date), Month = month(Date, label = TRUE, abbr = TRUE))
-  return(sea_ice_stats_df)
-}
-
-# Process each raster stack
-amsr_stats <- process_data(amsr_stack, amsr_dates, cell_area_sq_km) %>%
-  mutate(Source = "AMSR")
-
-nsidc_stats <- process_data(nsidc_stack, nsidc_dates, cell_area_sq_km) %>%
-  mutate(Source = "NSIDC")
-
-nsidc_harmonized_stats <- process_data(nsidc_harmonized_stack, nsidc_harmonized_dates, cell_area_sq_km) %>%
-  mutate(Source = "NSIDC_Harmonized")
-
-# Calculate differences between harmonized dataset and the other datasets
-differences <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats) %>%
-  spread(Source, ice_extent_km) %>%
-  mutate(
-    Diff_AMSR = NSIDC_Harmonized - AMSR,
-    Diff_NSIDC = NSIDC_Harmonized - NSIDC
-  )
-
-# Summarize differences
-summary_diff <- differences %>%
-  summarise(
-    Mean_Diff_AMSR = mean(Diff_AMSR, na.rm = TRUE),
-    SD_Diff_AMSR = sd(Diff_AMSR, na.rm = TRUE),
-    Mean_Diff_NSIDC = mean(Diff_NSIDC, na.rm = TRUE),
-    SD_Diff_NSIDC = sd(Diff_NSIDC, na.rm = TRUE)
-  )
-
-print(summary_diff)
-
-# Plot differences
-p_diff_amsr <- ggplot(differences, aes(x = Year, y = Diff_AMSR)) +
-  geom_line(color = "#377eb8") +
-  labs(title = "Difference in Sea Ice Extent: NSIDC Harmonized vs AMSR", y = "Difference (sq km)", x = "Year")
-
-p_diff_nsidc <- ggplot(differences, aes(x = Year, y = Diff_NSIDC)) +
-  geom_line(color = "#ff7f00") +
-  labs(title = "Difference in Sea Ice Extent: NSIDC Harmonized vs NSIDC", y = "Difference (sq km)", x = "Year")
-
-# Combine the plots into a grid
-combined_diff_plot <- p_diff_amsr / p_diff_nsidc + plot_layout(guides = 'collect') + theme(legend.position = "right")
-
-# Print the combined plot
-print(combined_diff_plot)
-
-
-```
-
-
 
 This script focuses on visualizing pixel-level differences between the AMSR, NSIDC (original), and NSIDC Harmonized datasets, using a black mask as a background for areas outside of the region of interest. Here’s a breakdown of what makes this script different from the others:
 
@@ -964,110 +845,228 @@ Key Features:
 
 **Visualize Pixel Level Difference**
 ```{r}
-# Load necessary libraries
-library(terra)
-library(ggplot2)
-library(patchwork)
+suppressPackageStartupMessages({
+  library(terra)
+  library(dplyr)
+  library(ggplot2)
+  library(patchwork)
+})
 
-# Load the raster black mask (we will color all masked areas black)
-black_mask_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/Land_Mask/Black_Mask.tif"
-black_mask <- rast(black_mask_path)
+# ------------------------------------------------------------
+# Land mask (EPSG:3031, units = meters)
+# ------------------------------------------------------------
 
-# Function to calculate the pixel-level difference (retain direction)
+land_mask_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/Land_Mask/land_mask.tif"
+land_mask <- rast(land_mask_path)
+
+# ------------------------------------------------------------
+# Pixel-level differences (AMSR − product) in native projection
+# ------------------------------------------------------------
+
 calculate_pixel_diff_raster <- function(layer1, layer2) {
-  diff <- layer1 - layer2  # Calculate the difference (retain direction)
-  return(diff)  # Return the difference as a SpatRaster object
+  layer1 - layer2  # AMSR minus comparison product
 }
 
-# Select dates for the layers to be compared (adjust according to your needs)
 date1 <- as.Date(amsr_dates[1])
 date2 <- as.Date(amsr_dates[2])
 date3 <- as.Date(amsr_dates[3])
 
-# Calculate pixel-level differences for AMSR vs. NSIDC (original)
+# AMSR vs NSIDC (original)
 pixel_diff_amsr_nsidc_1 <- calculate_pixel_diff_raster(amsr_stack[[1]], nsidc_stack[[1]])
 pixel_diff_amsr_nsidc_2 <- calculate_pixel_diff_raster(amsr_stack[[2]], nsidc_stack[[2]])
 pixel_diff_amsr_nsidc_3 <- calculate_pixel_diff_raster(amsr_stack[[3]], nsidc_stack[[3]])
 
-# Calculate pixel-level differences for AMSR vs. Harmonized
+# AMSR vs Harmonized Sea Ice Index
 pixel_diff_amsr_harmonized_1 <- calculate_pixel_diff_raster(amsr_stack[[1]], nsidc_harmonized_stack[[1]])
 pixel_diff_amsr_harmonized_2 <- calculate_pixel_diff_raster(amsr_stack[[2]], nsidc_harmonized_stack[[2]])
 pixel_diff_amsr_harmonized_3 <- calculate_pixel_diff_raster(amsr_stack[[3]], nsidc_harmonized_stack[[3]])
 
-# Convert the raster data to data frames for plotting
-df_amsr_nsidc_1 <- as.data.frame(pixel_diff_amsr_nsidc_1, xy = TRUE)
-df_amsr_nsidc_2 <- as.data.frame(pixel_diff_amsr_nsidc_2, xy = TRUE)
-df_amsr_nsidc_3 <- as.data.frame(pixel_diff_amsr_nsidc_3, xy = TRUE)
+# ------------------------------------------------------------
+# Convert to data frames in projected coordinates (meters)
+# Axes will be displayed as x, y (× 10^6 m) in ggplot
+# ------------------------------------------------------------
 
-df_amsr_harmonized_1 <- as.data.frame(pixel_diff_amsr_harmonized_1, xy = TRUE)
-df_amsr_harmonized_2 <- as.data.frame(pixel_diff_amsr_harmonized_2, xy = TRUE)
-df_amsr_harmonized_3 <- as.data.frame(pixel_diff_amsr_harmonized_3, xy = TRUE)
+to_df_ps <- function(r) {
+  df <- as.data.frame(r, xy = TRUE, na.rm = FALSE)
+  names(df) <- c("x_m", "y_m", "value")
+  df
+}
 
-# Convert black mask to a data frame
-df_black_mask <- as.data.frame(black_mask, xy = TRUE)
+df_land_mask <- as.data.frame(land_mask, xy = TRUE, na.rm = FALSE)
+names(df_land_mask) <- c("x_m", "y_m", "mask")
 
-# Define custom diverging color scale
+# keep only land cells (assumes land mask > 0 for land; adjust condition if needed)
+df_land_mask_land <- df_land_mask %>%
+  filter(!is.na(mask) & mask > 0)
+
+df_amsr_nsidc_1      <- to_df_ps(pixel_diff_amsr_nsidc_1)
+df_amsr_nsidc_2      <- to_df_ps(pixel_diff_amsr_nsidc_2)
+df_amsr_nsidc_3      <- to_df_ps(pixel_diff_amsr_nsidc_3)
+df_amsr_harmonized_1 <- to_df_ps(pixel_diff_amsr_harmonized_1)
+df_amsr_harmonized_2 <- to_df_ps(pixel_diff_amsr_harmonized_2)
+df_amsr_harmonized_3 <- to_df_ps(pixel_diff_amsr_harmonized_3)
+
+# ------------------------------------------------------------
+# Color scale, theme, and axis labels
+# ------------------------------------------------------------
+
 custom_colors <- scale_fill_gradient2(
-  low = "steelblue",    # Negative differences (blue)
-  mid = "white",        # Zero difference (white)
-  high = "orange",      # Positive differences (orange)
-  na.value = "black",   # NA values as black for background mask
-  limits = c(-0.5, 0.5),  # Adjust the range as needed
-  name = "Difference"
+  low       = "steelblue",    # AMSR < product (SIC lower)
+  mid       = "white",
+  high      = "orange",       # AMSR > product (SIC higher)
+  na.value  = NA,             # land handled by separate mask layer
+  limits    = c(-0.5, 0.5),
+  name      = "SIC difference\n(AMSR \u2212 product)"  # en dash minus; use "-" if you prefer
 )
 
-# Plot AMSR vs. NSIDC (original) pixel differences with black mask as background
+
+theme_map <- theme_minimal(base_size = 9) +
+  theme(
+    panel.grid  = element_blank(),
+    axis.title  = element_text(size = 9),
+    axis.text   = element_text(size = 8),
+    plot.title  = element_text(
+      size   = 9,
+      face   = "bold",
+      hjust  = 0,
+      margin = margin(b = 4)
+    )
+  )
+
+# Axes in units of 10^6 m
+x_lab <- expression("x ("*10^6*" m)")
+y_lab <- expression("y ("*10^6*" m)")
+
+scale_xy_1e6 <- list(
+  scale_x_continuous(labels = function(v) v / 1e6),
+  scale_y_continuous(labels = function(v) v / 1e6)
+)
+
+# ------------------------------------------------------------
+# Plots in EPSG:3031 with x,y scaled by 10^6 and black land mask
+# Panel titles = dates only
+# ------------------------------------------------------------
+
 plot_amsr_nsidc_1 <- ggplot() +
-  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
-  geom_raster(data = df_amsr_nsidc_1, aes(x = x, y = y, fill = df_amsr_nsidc_1[, 3])) +
+  geom_raster(data = df_land_mask_land, aes(x = x_m, y = y_m), fill = "black") +
+  geom_raster(data = df_amsr_nsidc_1, aes(x = x_m, y = y_m, fill = value)) +
   custom_colors +
-  labs(title = paste("AMSR vs NSIDC (Original) - Date:", date1)) +
-  theme_minimal()
+  coord_equal() +
+  scale_xy_1e6 +
+  labs(
+    title = format(date1, "%Y-%m-%d"),
+    x = x_lab,
+    y = y_lab
+  ) +
+  theme_map
 
 plot_amsr_nsidc_2 <- ggplot() +
-  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
-  geom_raster(data = df_amsr_nsidc_2, aes(x = x, y = y, fill = df_amsr_nsidc_2[, 3])) +
+  geom_raster(data = df_land_mask_land, aes(x = x_m, y = y_m), fill = "black") +
+  geom_raster(data = df_amsr_nsidc_2, aes(x = x_m, y = y_m, fill = value)) +
   custom_colors +
-  labs(title = paste("AMSR vs NSIDC (Original) - Date:", date2)) +
-  theme_minimal()
+  coord_equal() +
+  scale_xy_1e6 +
+  labs(
+    title = format(date2, "%Y-%m-%d"),
+    x = x_lab,
+    y = y_lab
+  ) +
+  theme_map
 
 plot_amsr_nsidc_3 <- ggplot() +
-  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
-  geom_raster(data = df_amsr_nsidc_3, aes(x = x, y = y, fill = df_amsr_nsidc_3[, 3])) +
+  geom_raster(data = df_land_mask_land, aes(x = x_m, y = y_m), fill = "black") +
+  geom_raster(data = df_amsr_nsidc_3, aes(x = x_m, y = y_m, fill = value)) +
   custom_colors +
-  labs(title = paste("AMSR vs NSIDC (Original) - Date:", date3)) +
-  theme_minimal()
+  coord_equal() +
+  scale_xy_1e6 +
+  labs(
+    title = format(date3, "%Y-%m-%d"),
+    x = x_lab,
+    y = y_lab
+  ) +
+  theme_map
 
-# Plot AMSR vs. Harmonized pixel differences with black mask as background
 plot_amsr_harmonized_1 <- ggplot() +
-  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
-  geom_raster(data = df_amsr_harmonized_1, aes(x = x, y = y, fill = df_amsr_harmonized_1[, 3])) +
+  geom_raster(data = df_land_mask_land, aes(x = x_m, y = y_m), fill = "black") +
+  geom_raster(data = df_amsr_harmonized_1, aes(x = x_m, y = y_m, fill = value)) +
   custom_colors +
-  labs(title = paste("AMSR vs Harmonized - Date:", date1)) +
-  theme_minimal()
+  coord_equal() +
+  scale_xy_1e6 +
+  labs(
+    title = format(date1, "%Y-%m-%d"),
+    x = x_lab,
+    y = y_lab
+  ) +
+  theme_map
 
 plot_amsr_harmonized_2 <- ggplot() +
-  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
-  geom_raster(data = df_amsr_harmonized_2, aes(x = x, y = y, fill = df_amsr_harmonized_2[, 3])) +
+  geom_raster(data = df_land_mask_land, aes(x = x_m, y = y_m), fill = "black") +
+  geom_raster(data = df_amsr_harmonized_2, aes(x = x_m, y = y_m, fill = value)) +
   custom_colors +
-  labs(title = paste("AMSR vs Harmonized - Date:", date2)) +
-  theme_minimal()
+  coord_equal() +
+  scale_xy_1e6 +
+  labs(
+    title = format(date2, "%Y-%m-%d"),
+    x = x_lab,
+    y = y_lab
+  ) +
+  theme_map
 
 plot_amsr_harmonized_3 <- ggplot() +
-  geom_raster(data = df_black_mask, aes(x = x, y = y), fill = "black", na.rm = TRUE) +  # Plot black mask first (background)
-  geom_raster(data = df_amsr_harmonized_3, aes(x = x, y = y, fill = df_amsr_harmonized_3[, 3])) +
+  geom_raster(data = df_land_mask_land, aes(x = x_m, y = y_m), fill = "black") +
+  geom_raster(data = df_amsr_harmonized_3, aes(x = x_m, y = y_m, fill = value)) +
   custom_colors +
-  labs(title = paste("AMSR vs Harmonized - Date:", date3)) +
-  theme_minimal()
+  coord_equal() +
+  scale_xy_1e6 +
+  labs(
+    title = format(date3, "%Y-%m-%d"),
+    x = x_lab,
+    y = y_lab
+  ) +
+  theme_map
 
-# Combine the plots side by side for AMSR vs NSIDC and AMSR vs Harmonized comparisons
-combined_plot <- (plot_amsr_nsidc_1 + plot_amsr_harmonized_1) / 
-  (plot_amsr_nsidc_2 + plot_amsr_harmonized_2) / 
+# ------------------------------------------------------------
+# Column headers (one per column)
+# ------------------------------------------------------------
+
+col_title_left <- ggplot() +
+  theme_void() +
+  ggtitle("AMSR − Sea Ice Index") +
+  theme(
+    plot.title = element_text(
+      hjust = 0.5,
+      face  = "bold",
+      size  = 10
+    )
+  )
+
+col_title_right <- ggplot() +
+  theme_void() +
+  ggtitle("AMSR − Harmonized Sea Ice Index") +
+  theme(
+    plot.title = element_text(
+      hjust = 0.5,
+      face  = "bold",
+      size  = 10
+    )
+  )
+
+# ------------------------------------------------------------
+# Combined panel: column titles + maps
+# ------------------------------------------------------------
+
+combined_plot <-
+  (col_title_left + col_title_right) /
+  (plot_amsr_nsidc_1 + plot_amsr_harmonized_1) /
+  (plot_amsr_nsidc_2 + plot_amsr_harmonized_2) /
   (plot_amsr_nsidc_3 + plot_amsr_harmonized_3) +
-  plot_layout(guides = 'collect')
+  plot_layout(
+    guides  = "collect",
+    heights = c(0.15, 1, 1, 1)
+  )
 
-# Print the combined plot
 print(combined_plot)
+
 
 
 ```
