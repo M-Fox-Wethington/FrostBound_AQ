@@ -571,6 +571,8 @@ Output:
 ## Visualize the overlapping datasets 
 ```{r}
 
+rm(list=ls()); gc()
+
 # Load necessary libraries
 library(terra)
 library(dplyr)
@@ -579,9 +581,11 @@ library(ggplot2)
 library(patchwork)  # For combining plots
 
 # Define file paths for the raster datasets
-amsr_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif"
-nsidc_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_common_dates.tif"
-nsidc_harmonized_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_harmonized_common_dates.tif"
+amsr_path <-"C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/amsr_common_dates.tif"
+nsidc_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_common_dates.tif"
+nsidc_harmonized_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison/nsidc_harmonized_common_dates.tif"
+
+# Load the raster datasets
 
 # Load the raster datasets
 amsr_stack <- rast(amsr_path)
@@ -613,11 +617,6 @@ process_data <- function(raster, dates, cell_area_sq_km) {
   return(sea_ice_stats_df)
 }
 
-# Process each raster stack
-amsr_stats <- process_data(amsr_stack, amsr_dates, cell_area_sq_km)
-nsidc_stats <- process_data(nsidc_stack, nsidc_dates, cell_area_sq_km)
-nsidc_harmonized_stats <- process_data(nsidc_harmonized_stack, nsidc_harmonized_dates, cell_area_sq_km)
-
 # Ensure consistent column names for all datasets before merging
 amsr_stats <- process_data(amsr_stack, amsr_dates, cell_area_sq_km) %>%
   mutate(Source = "AMSR") %>%
@@ -631,28 +630,59 @@ nsidc_harmonized_stats <- process_data(nsidc_harmonized_stack, nsidc_harmonized_
   mutate(Source = "NSIDC_Harmonized") %>%
   rename(ice_extent_km = global)
 
+# ---- daily extent differences: harmonized vs AMSR and vs NSIDC ----------------
 
-# 
-# # Calculate annual statistics
-# stats_summary <- amsr_stats %>% 
-#   full_join(nsidc_stats, by = "Year") %>% 
-#   full_join(nsidc_harmonized_stats, by = "Year") %>% 
-#   group_by(Year) %>%
-#   summarise(mean_extent = mean(global, na.rm = TRUE),
-#             median_extent = median(global, na.rm = TRUE),
-#             max_extent = max(global, na.rm = TRUE),
-#             min_extent = min(global, na.rm = TRUE))
-# 
-# # Calculate annual statistics using the correct data structure
-# stats_summary <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats) %>%
-#   group_by(Year, Source) %>%
-#   summarise(
-#     mean_extent = mean(global, na.rm = TRUE),
-#     median_extent = median(global, na.rm = TRUE),
-#     max_extent = max(global, na.rm = TRUE),
-#     min_extent = min(global, na.rm = TRUE),
-#     .groups = "drop"  # Drop grouping for further manipulations
-#   )
+# Bind all daily stats and spread to wide format: one row per date, columns per Source
+differences <- bind_rows(
+  amsr_stats,
+  nsidc_stats,
+  nsidc_harmonized_stats
+) %>%
+  tidyr::pivot_wider(
+    # all columns except Source and ice_extent_km become identifiers
+    names_from  = Source,
+    values_from = ice_extent_km
+  ) %>%
+  mutate(
+    # harmonized vs AMSR (harmonized - AMSR)
+    Diff_AMSR   = NSIDC_Harmonized - AMSR,
+    # harmonized vs original NSIDC (harmonized - NSIDC)
+    Diff_NSIDC  = NSIDC_Harmonized - NSIDC
+  )
+
+# Summaries of those differences (in km^2, same units as ice_extent_km)
+diff_summary <- differences %>%
+  summarise(
+    # Harmonized vs AMSR (H − A)
+    Mean_Diff_AMSR    = mean(Diff_AMSR,    na.rm = TRUE),
+    Median_Diff_AMSR  = median(Diff_AMSR,  na.rm = TRUE),
+    IQR_Diff_AMSR     = IQR(Diff_AMSR,     na.rm = TRUE),
+    P5_Diff_AMSR      = quantile(Diff_AMSR, 0.05, na.rm = TRUE),
+    P25_Diff_AMSR     = quantile(Diff_AMSR, 0.25, na.rm = TRUE),
+    P75_Diff_AMSR     = quantile(Diff_AMSR, 0.75, na.rm = TRUE),
+    P95_Diff_AMSR     = quantile(Diff_AMSR, 0.95, na.rm = TRUE),
+    
+    # Harmonized vs original NSIDC (H − N)
+    Mean_Diff_NSIDC   = mean(Diff_NSIDC,   na.rm = TRUE),
+    Median_Diff_NSIDC = median(Diff_NSIDC, na.rm = TRUE),
+    IQR_Diff_NSIDC    = IQR(Diff_NSIDC,    na.rm = TRUE),
+    P5_Diff_NSIDC     = quantile(Diff_NSIDC, 0.05, na.rm = TRUE),
+    P25_Diff_NSIDC    = quantile(Diff_NSIDC, 0.25, na.rm = TRUE),
+    P75_Diff_NSIDC    = quantile(Diff_NSIDC, 0.75, na.rm = TRUE),
+    P95_Diff_NSIDC    = quantile(Diff_NSIDC, 0.95, na.rm = TRUE)
+  )
+
+
+# Show all columns in the console
+print(diff_summary, width = Inf)
+
+# Or, show all rows and columns (good habit with tibbles)
+print(diff_summary, n = Inf, width = Inf)
+
+# Or convert to a plain data.frame first
+as.data.frame(diff_summary)
+
+
 
 # Calculate annual statistics using the correct data structure
 stats_summary <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats) %>%
@@ -665,38 +695,120 @@ stats_summary <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats) %>%
     .groups = "drop"  # Drop grouping for further manipulations
   )
 
-# Define color-blind friendly colors
-line_colors <- c("AMSR" = "#377eb8", "NSIDC" = "#ff7f00", "NSIDC Harmonized" = "#4daf4a")
 
 
-# Plotting each statistic with all sources on each plot
-p_mean <- ggplot(stats_summary, aes(x = Year, y = mean_extent, color = Source)) +
-  geom_line(size = 0.75) +
-  scale_color_manual(values = line_colors) +
-  labs(title = "Mean Annual Sea Ice Extent", y = "Mean Extent (sq km)")
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(ggplot2)
+  library(patchwork)
+})
 
-p_median <- ggplot(stats_summary, aes(x = Year, y = median_extent, color = Source)) +
-  geom_line(size = 0.75) +
-  scale_color_manual(values = line_colors) +
-  labs(title = "Median Annual Sea Ice Extent", y = "Median Extent (sq km)")
+# -------------------------------------------------------------------
+# Prepare data for plotting
+# -------------------------------------------------------------------
 
-p_max <- ggplot(stats_summary, aes(x = Year, y = max_extent, color = Source)) +
-  geom_line(size = 0.75) +
-  scale_color_manual(values = line_colors) +
-  labs(title = "Maximum Annual Sea Ice Extent", y = "Max Extent (sq km)")
+stats_plot <- stats_summary %>%
+  mutate(
+    # Nice labels for legend
+    Source = dplyr::recode(
+      Source,
+      "AMSR"            = "AMSR Unified",
+      "NSIDC"           = "Sea Ice Index",
+      "NSIDC_Harmonized"= "Harmonized Sea Ice Index"
+    ),
+    # Convert to millions of km^2 for easier reading
+    mean_extent   = mean_extent   / 1e6,
+    median_extent = median_extent / 1e6,
+    max_extent    = max_extent    / 1e6,
+    min_extent    = min_extent    / 1e6
+  )
 
-p_min <- ggplot(stats_summary, aes(x = Year, y = min_extent, color = Source)) +
-  geom_line(size = 0.75) +
-  scale_color_manual(values = line_colors) +
-  labs(title = "Minimum Annual Sea Ice Extent", y = "Min Extent (sq km)")
+# Color-blind friendly palette matching the recoded labels
+line_colors <- c(
+  "AMSR Unified"             = "#377eb8",
+  "Sea Ice Index"            = "#ff7f00",
+  "Harmonized Sea Ice Index" = "#4daf4a"
+)
 
-# Combine the plots into a grid
-combined_plot <- (p_mean | p_median) / (p_max | p_min) + 
-  plot_layout(guides = 'collect') +
+# Shared theme
+theme_nature <- theme_bw(base_size = 9) +
+  theme(
+    panel.grid.major = element_line(size = 0.25, colour = "grey85"),
+    panel.grid.minor = element_blank(),
+    axis.title.x     = element_text(margin = margin(t = 6)),
+    axis.title.y     = element_text(margin = margin(r = 6)),
+    plot.title       = element_text(face = "bold", size = 9, hjust = 0),
+    legend.title     = element_text(size = 8),
+    legend.text      = element_text(size = 7),
+    legend.key.width = unit(0.5, "cm"),
+    legend.key.height= unit(0.4, "cm")
+  )
+
+# X-axis breaks (adjust step if needed)
+year_breaks <- seq(min(stats_plot$Year), max(stats_plot$Year), by = 2)
+
+# Y-axis label used across panels
+y_lab <- expression("Sea-ice extent ("*10^6*" km"^2*")")
+
+# -------------------------------------------------------------------
+# Individual panels
+# -------------------------------------------------------------------
+
+p_mean <- ggplot(stats_plot, aes(x = Year, y = mean_extent, color = Source)) +
+  geom_line(linewidth = 0.5) +
+  scale_color_manual(values = line_colors, name = "Dataset") +
+  scale_x_continuous(breaks = year_breaks) +
+  labs(
+    title = "a  Mean winter extent",
+    y     = y_lab,
+    x     = NULL
+  ) +
+  theme_nature
+
+p_median <- ggplot(stats_plot, aes(x = Year, y = median_extent, color = Source)) +
+  geom_line(linewidth = 0.5) +
+  scale_color_manual(values = line_colors, guide = "none") +
+  scale_x_continuous(breaks = year_breaks) +
+  labs(
+    title = "b  Median winter extent",
+    y     = y_lab,
+    x     = NULL
+  ) +
+  theme_nature
+
+p_max <- ggplot(stats_plot, aes(x = Year, y = max_extent, color = Source)) +
+  geom_line(linewidth = 0.5) +
+  scale_color_manual(values = line_colors, guide = "none") +
+  scale_x_continuous(breaks = year_breaks) +
+  labs(
+    title = "c  Maximum winter extent",
+    y     = y_lab,
+    x     = "Year"
+  ) +
+  theme_nature
+
+p_min <- ggplot(stats_plot, aes(x = Year, y = min_extent, color = Source)) +
+  geom_line(linewidth = 0.5) +
+  scale_color_manual(values = line_colors, guide = "none") +
+  scale_x_continuous(breaks = year_breaks) +
+  labs(
+    title = "d  Minimum winter extent",
+    y     = y_lab,
+    x     = "Year"
+  ) +
+  theme_nature
+
+# -------------------------------------------------------------------
+# Combine the panels
+# -------------------------------------------------------------------
+
+combined_plot <- (p_mean | p_median) / (p_max | p_min) +
+  plot_layout(guides = "collect") &
   theme(legend.position = "right")
 
-# Print the combined plot
 print(combined_plot)
+
+
 
 ```
 
