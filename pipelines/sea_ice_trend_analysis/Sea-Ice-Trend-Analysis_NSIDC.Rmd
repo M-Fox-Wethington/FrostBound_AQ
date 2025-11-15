@@ -109,67 +109,148 @@ saveRDS(monthly_variability_df, file.path(output_dir, "Harmonized_12km_Daily_Met
 ## Calculate Monthly Persistence and Duration Metrics
 
 ```{r calculate_persistence_duration}
-calculate_persistence_duration_stats <- function(file_path, ice_threshold = 0.15, winter_months = c(6, 7, 8, 9)) {
+# -------------------------------------------------------------------
+# Updated sea-ice trend metrics to match Gentoo definitions
+#   Duration  = mean length of all ice spells per pixel (SIC > threshold)
+#   Persistence = mean open-water frequency per pixel (SIC < threshold)
+# -------------------------------------------------------------------
+
+library(terra)
+library(dplyr)
+library(lubridate)
+library(purrr)
+
+calculate_persistence_duration_stats <- function(file_path,
+                                                 ice_threshold  = 0.15,
+                                                 winter_months  = c(6, 7, 8, 9)) {
+  # Read regional raster stack
   raster_stack <- rast(file_path)
+  
+  # Extract dates for each layer
   layer_dates <- as.Date(as.numeric(time(raster_stack)), origin = "1970-01-01")
   
-  # Filter for winter months
-  winter_indices <- which(month(layer_dates) %in% winter_months)
-  winter_raster_stack <- subset(raster_stack, winter_indices)
-  winter_dates <- layer_dates[winter_indices]
+  # Restrict to winter months
+  winter_indices       <- which(month(layer_dates) %in% winter_months)
+  winter_raster_stack  <- subset(raster_stack, winter_indices)
+  winter_dates         <- layer_dates[winter_indices]
   
-  # Calculate persistence and duration
-  calculate_persistence <- function(x, threshold) sum(x >= threshold, na.rm = TRUE)
-  calculate_duration <- function(x, threshold) {
-    rle_result <- rle(as.vector(x) >= threshold)
-    max_duration <- ifelse(any(rle_result$values), max(rle_result$lengths[rle_result$values]), 0)
-    return(max_duration)
+  # ------------------------------------------------------------------
+  # Pixel-level helper functions (matching Gentoo model definitions)
+  # ------------------------------------------------------------------
+  
+  # Mean duration of ice spells (SIC > threshold) for a single pixel
+  calc_mean_duration <- function(x, threshold) {
+    # x is the time series of SIC for a single pixel over the month
+    if (all(is.na(x))) return(NA_real_)
+    
+    valid <- !is.na(x)
+    if (!any(valid)) return(NA_real_)
+    
+    x_valid <- x[valid]
+    rle_result <- rle(x_valid > threshold)
+    
+    # If no ice spells, duration = 0
+    if (!any(rle_result$values)) return(0)
+    
+    mean(rle_result$lengths[rle_result$values])
   }
   
+  # Open-water frequency (proportion of days with SIC < threshold) for a single pixel
+  calc_open_water_freq <- function(x, threshold) {
+    ow <- mean(x < threshold, na.rm = TRUE)
+    if (is.nan(ow)) return(NA_real_)  # all NA
+    ow
+  }
+  
+  # ------------------------------------------------------------------
+  # Aggregate by winter month
+  # ------------------------------------------------------------------
+  
   months <- unique(floor_date(winter_dates, "month"))
-  results <- lapply(months, function(month) {
-    month_indices <- which(floor_date(winter_dates, "month") == month)
-    month_raster_stack <- subset(winter_raster_stack, month_indices)
+  
+  results <- lapply(months, function(m) {
+    month_indices       <- which(floor_date(winter_dates, "month") == m)
+    month_raster_stack  <- subset(winter_raster_stack, month_indices)
     
-    persistence <- app(month_raster_stack, function(x) calculate_persistence(x, ice_threshold))
-    duration <- app(month_raster_stack, function(x) calculate_duration(x, ice_threshold))
+    # Per-pixel mean ice-spell length over this month
+    duration_rast <- app(
+      month_raster_stack,
+      fun = function(x) calc_mean_duration(x, ice_threshold)
+    )
+    
+    # Per-pixel open-water frequency over this month
+    open_water_rast <- app(
+      month_raster_stack,
+      fun = function(x) calc_open_water_freq(x, ice_threshold)
+    )
+    
+    # Region-level summaries (mean and SD across pixels)
+    mean_duration <- global(duration_rast,    fun = mean, na.rm = TRUE)[, 1]
+    sd_duration   <- global(duration_rast,    fun = sd,   na.rm = TRUE)[, 1]
+    mean_ow       <- global(open_water_rast,  fun = mean, na.rm = TRUE)[, 1]
+    sd_ow         <- global(open_water_rast,  fun = sd,   na.rm = TRUE)[, 1]
     
     data.frame(
-      Month = month,
-      Persistence = global(persistence, fun = mean, na.rm = TRUE)[, 1],
-      Persistence_SD = global(persistence, fun = sd, na.rm = TRUE)[, 1],
-      Mean_Monthly_Duration = global(duration, fun = mean, na.rm = TRUE)[, 1],
-      Duration_SD = global(duration, fun = sd, na.rm = TRUE)[, 1]
+      Month                = m,
+      # NOTE: Persistence here = open-water frequency (SIC < threshold)
+      Persistence          = mean_ow,
+      Persistence_SD       = sd_ow,
+      # NOTE: Mean_Monthly_Duration here = mean length of all ice spells
+      Mean_Monthly_Duration = mean_duration,
+      Duration_SD          = sd_duration
     )
   }) %>% bind_rows()
   
-  region_name <- sub("NSIDC_25km_Harmonized_", "", tools::file_path_sans_ext(basename(file_path)))
+  # Derive region name from file name
+  region_name <- sub("NSIDC_25km_Harmonized_", "",
+                     tools::file_path_sans_ext(basename(file_path)))
   results$Region <- region_name
+  
   return(results)
 }
 
-# Process all files
+# --------------------------------------------------------------------
+# Process all regional files (chunks) using updated metric definitions
+# --------------------------------------------------------------------
+
 master_df <- lapply(chunk_files, function(file) {
   cat("Processing file:", file, "\n")
   calculate_persistence_duration_stats(file)
 }) %>% bind_rows()
 
-# Clean data
+# --------------------------------------------------------------------
+# Clean and export
+# --------------------------------------------------------------------
+
 cleaned_metrics <- master_df %>%
   rename(Date = Month) %>%
   mutate(
-    Date = as.Date(Date),
-    Year = year(Date), 
-    Month = month(Date), 
-    Day = day(Date),
-    Region = ifelse(Region == "nsidc_12_5km_harmonized_1979-2023", "Complete Study Area", Region)
+    Date   = as.Date(Date),
+    Year   = year(Date),
+    Month  = month(Date),
+    Day    = day(Date),
+    # Map full-region file to "Complete Study Area" label
+    Region = ifelse(
+      Region == "nsidc_12_5km_harmonized_1979-2023",
+      "Complete Study Area",
+      Region
+    )
   ) %>%
-  filter(Month %in% c(6, 7, 8, 9)) %>%
+  filter(Month %in% c(6, 7, 8, 9)) %>%  # winter months (redundant but explicit)
   distinct()
 
 # Save outputs
-write.csv(cleaned_metrics, file.path(output_dir, "Persistence_Duration_Metrics.csv"), row.names = FALSE)
-saveRDS(cleaned_metrics, file.path(output_dir, "Persistence_Duration_Metrics.rds"))
+write.csv(
+  cleaned_metrics,
+  file.path(output_dir, "Persistence_Duration_Metrics.csv"),
+  row.names = FALSE
+)
+
+saveRDS(
+  cleaned_metrics,
+  file.path(output_dir, "Persistence_Duration_Metrics.rds")
+)
+
 ```
 
 # PART 2: CHANGEPOINT ANALYSIS
