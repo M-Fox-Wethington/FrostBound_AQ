@@ -1502,7 +1502,6 @@ ggplot(data, aes(x = NSIDC)) +
 
 
 
-
 # Sort the heatmap data by SMAPE in descending order
 top_errors <- heatmap_data %>%
   arrange(desc(SMAPE)) %>%
