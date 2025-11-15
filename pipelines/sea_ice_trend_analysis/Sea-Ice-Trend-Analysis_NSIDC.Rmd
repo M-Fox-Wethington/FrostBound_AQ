@@ -105,6 +105,7 @@ write.csv(monthly_variability_df, file.path(output_dir, "Harmonized_12km_Daily_M
 saveRDS(monthly_variability_df, file.path(output_dir, "Harmonized_12km_Daily_Metrics_Monthly_Variability_Metrics.rds"))
 ```
 
+
 ## Calculate Monthly Persistence and Duration Metrics
 
 ```{r calculate_persistence_duration}
@@ -202,6 +203,8 @@ cat("Detected changepoints at years:", changepoints_years, "\n")
 ```
 
 # PART 3: UNIFIED GLS ANALYSIS FUNCTION
+GLS script:
+
 
 This single function handles all metrics and time periods.
 
@@ -764,15 +767,4 @@ analyze_sea_ice_spatial <- function(start_year, end_year, use_mask = TRUE,
 #                        report_metrics = c("concentration", "duration", "persistence"))
 ```
 
----
 
-# SUMMARY
-
-This optimized script consolidates:
-- All metric calculations into efficient functions
-- 6 redundant analysis chunks into 1 unified GLS function
-- Automated deployment of all analyses via parameter grids
-- Streamlined extraction and visualization of results
-- Complete spatial analysis capabilities
-
-All original functionality is preserved while reducing code length by ~60% and improving maintainability.
