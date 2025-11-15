@@ -7,7 +7,7 @@ library(tidyr)       # complete()
 library(viridis)     # scale_fill_viridis()
 
 # 2. Define data directory and read all CSVs
-data_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/gentoo-model-results/subset-for-tables/R-Visualization"
+data_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/data/visualization"
 csv_files <- list.files(data_dir, pattern = "\\.csv$", full.names = TRUE)
 
 df_raw <- csv_files %>%
