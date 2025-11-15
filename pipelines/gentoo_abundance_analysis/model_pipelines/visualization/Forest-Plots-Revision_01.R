@@ -1,5 +1,5 @@
 # ============================================================================
-# FOREST PLOT GENERATOR FROM CSV FILES from Revision 01 Results
+# FOREST PLOT GENERATOR FROM CSV FILES
 # Standalone script to create publication-ready forest plots
 # ============================================================================
 
@@ -12,9 +12,20 @@ library(viridis)
 library(purrr)
 library(readr)
 
+# ── COLORBLIND-FRIENDLY LAG COLORS ───────────────────────────────────────────
+# Wong 2011 palette - highly distinguishable, colorblind-safe
+lag_colors <- c(
+  "1" = "#E69F00",  # Orange
+  "2" = "#56B4E9",  # Sky Blue
+  "3" = "#009E73",  # Bluish Green
+  "4" = "#F0E442",  # Yellow
+  "5" = "#D55E00"   # Vermillion
+)
+
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 # Directory containing CSV files
 csv_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/forest_plot_data"
+
 results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/results"
 
 # Output directory for plots
@@ -108,30 +119,84 @@ plot_data <- all_data %>%
     )
   )
 
+# ============================================================================
+# FIX VARIABILITY METRIC NAMES
+# ============================================================================
+
+plot_data <- plot_data %>%
+  mutate(
+    metric = case_when(
+      metric == "Variability" & str_detect(source_file, "Concentration") ~ "Sea Ice Concentration Variability",
+      metric == "Variability" & str_detect(source_file, "Extent") ~ "Sea Ice Extent Variability",
+      metric == "Variability" & str_detect(source_file, "Duration") ~ "Duration Variability",
+      metric == "Variability" & str_detect(source_file, "OpenWater") ~ "Open Water Frequency Variability",
+      TRUE ~ metric
+    )
+  )
+
+# Update metric_type classification after renaming
+plot_data <- plot_data %>%
+  mutate(
+    metric_type = if_else(
+      str_detect(metric, "Variability"), 
+      "Variability", 
+      "Main"
+    )
+  )
+
 cat(sprintf("Prepared %d rows for plotting\n", nrow(plot_data)))
 cat(sprintf("Unique metrics: %d\n", n_distinct(plot_data$metric)))
 cat(sprintf("Home range sizes: %s\n", paste(levels(plot_data$hr_size), collapse = ", ")))
 cat(sprintf("Lags: %s\n", paste(sort(unique(plot_data$lag)), collapse = ", ")))
 
 # ============================================================================
-# FOREST PLOT 1: MAIN METRICS
+# PATCH: Figures 06 & 07 - Specific Metric Selection and Ordering
 # ============================================================================
 
-cat("\n", rep("=", 70), "\n")
-cat("CREATING MAIN METRICS FOREST PLOT\n")
-cat(rep("=", 70), "\n\n")
+# Define metric names and order for figures
+fig06_metrics <- c(
+  "Sea Ice Concentration",
+  "Sea Ice Extent", 
+  "Duration",
+  "Open Water Frequency"
+)
 
+fig07_metrics <- c(
+  "Sea Ice Concentration Variability",
+  "Sea Ice Extent Variability",
+  "Duration Variability", 
+  "Open Water Frequency Variability"
+)
+
+# Filter and prepare data for Figure 06
 main_df <- plot_data %>%
   filter(metric_type == "Main") %>%
-  filter(!is.na(coefficient))
+  filter(metric %in% fig06_metrics) %>%
+  filter(threshold %in% c("0.15", "0.3", "0.5")) %>%
+  filter(!is.na(coefficient)) %>%
+  mutate(
+    metric = factor(metric, levels = fig06_metrics),
+    threshold = factor(threshold, levels = c("0.15", "0.3", "0.5"))
+  )
+
+# Filter and prepare data for Figure 07
+var_df <- plot_data %>%
+  filter(metric_type == "Variability") %>%
+  filter(metric %in% fig07_metrics) %>%
+  filter(threshold %in% c("0.15", "0.3", "0.5")) %>%
+  filter(!is.na(coefficient)) %>%
+  mutate(
+    metric = factor(metric, levels = fig07_metrics),
+    threshold = factor(threshold, levels = c("0.15", "0.3", "0.5"))
+  )
+
+
+
+# ── FIGURE 06: Main Metrics (4 rows × 3 columns) ─────────────────────────
 
 if (nrow(main_df) > 0) {
   
-  # Check if thresholds exist
-  has_threshold <- length(unique(main_df$threshold)) > 1 || 
-    !all(is.na(main_df$threshold))
-  
-  forest_main <- ggplot(main_df, aes(x = coefficient, y = hr_size, color = lag)) +
+  fig06_forest <- ggplot(main_df, aes(x = coefficient, y = hr_size, color = lag)) +
     geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
     geom_errorbarh(
       aes(xmin = cilower, xmax = ciupper),
@@ -140,62 +205,41 @@ if (nrow(main_df) > 0) {
       na.rm = TRUE
     ) +
     geom_point(position = position_dodge(width = 0.7), size = 2, na.rm = TRUE) +
-    scale_color_viridis_d(name = "Lag (years)", end = 0.8) +
+    facet_grid(metric ~ threshold, scales = "free_y") +
+    scale_color_manual(name = "Lag (years)", values = lag_colors) +
     theme_bw(base_size = 12) +
     theme(
       panel.grid.major.y = element_blank(),
       strip.background = element_rect(fill = "grey90", color = NA),
       strip.text = element_text(face = "bold"),
       legend.position = "bottom",
-      axis.text.x = element_text(size = 10),
-      axis.text.y = element_text(size = 10)
+      axis.title.x = element_text(margin = margin(t = 12)),
+      axis.title.y = element_text(margin = margin(r = 12))
     ) +
     labs(
-      title = "Forest Plot: Main Sea Ice Metrics",
       x = "Coefficient (95% CI)",
       y = "Home Range Size (km)"
     )
   
-  # Add faceting
-  if (has_threshold) {
-    forest_main <- forest_main +
-      facet_grid(metric ~ threshold, scales = "free_y")
-  } else {
-    forest_main <- forest_main +
-      facet_wrap(~ metric, scales = "free_y", ncol = 1)
-  }
+  print(fig06_forest)
   
-  print(forest_main)
+  ggsave(file.path(output_dir, "Figure_06_Main_Metrics.png"), 
+         fig06_forest, width = 12, height = 10, dpi = 300)
+  ggsave(file.path(output_dir, "Figure_06_Main_Metrics.pdf"), 
+         fig06_forest, width = 12, height = 10)
   
-  ggsave(file.path(output_dir, "forest_main_metrics.png"), 
-         forest_main, width = 10, height = 8, dpi = 300)
-  ggsave(file.path(output_dir, "forest_main_metrics.pdf"), 
-         forest_main, width = 10, height = 8)
-  
-  cat("  Saved: forest_main_metrics.png/pdf\n")
-  
-} else {
-  cat("  No main metrics data to plot\n")
+  cat("  Saved: Figure_06_Main_Metrics.png/pdf\n")
 }
 
-# ============================================================================
-# FOREST PLOT 2: VARIABILITY METRICS
-# ============================================================================
-
-cat("\n", rep("=", 70), "\n")
-cat("CREATING VARIABILITY METRICS FOREST PLOT\n")
-cat(rep("=", 70), "\n\n")
-
-var_df <- plot_data %>%
-  filter(metric_type == "Variability") %>%
-  filter(!is.na(coefficient))
+# ── FIGURE 07: Variability Metrics (4 rows × 3 columns) ──────────────────
 
 if (nrow(var_df) > 0) {
   
-  has_threshold <- length(unique(var_df$threshold)) > 1 || 
-    !all(is.na(var_df$threshold))
+  # Strip "Variability" from display names for cleaner labels
+  var_df_plot <- var_df %>%
+    mutate(metric_display = str_remove(metric, " Variability$"))
   
-  forest_var <- ggplot(var_df, aes(x = coefficient, y = hr_size, color = lag)) +
+  fig07_forest <- ggplot(var_df_plot, aes(x = coefficient, y = hr_size, color = lag)) +
     geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
     geom_errorbarh(
       aes(xmin = cilower, xmax = ciupper),
@@ -204,190 +248,31 @@ if (nrow(var_df) > 0) {
       na.rm = TRUE
     ) +
     geom_point(position = position_dodge(width = 0.7), size = 2, na.rm = TRUE) +
-    scale_color_viridis_d(name = "Lag (years)", end = 0.8) +
+    facet_grid(metric_display ~ threshold, scales = "free_y") +
+    scale_color_manual(name = "Lag (years)", values = lag_colors) +
     theme_bw(base_size = 12) +
     theme(
       panel.grid.major.y = element_blank(),
       strip.background = element_rect(fill = "grey90", color = NA),
       strip.text = element_text(face = "bold"),
       legend.position = "bottom",
-      axis.text.x = element_text(size = 10),
-      axis.text.y = element_text(size = 10)
+      axis.title.x = element_text(margin = margin(t = 12)),
+      axis.title.y = element_text(margin = margin(r = 12))
     ) +
     labs(
-      title = "Forest Plot: Variability Metrics",
       x = "Coefficient (95% CI)",
       y = "Home Range Size (km)"
     )
   
-  if (has_threshold) {
-    forest_var <- forest_var +
-      facet_grid(metric ~ threshold, scales = "free_y")
-  } else {
-    forest_var <- forest_var +
-      facet_wrap(~ metric, scales = "free_y", ncol = 1)
-  }
+  print(fig07_forest)
   
-  print(forest_var)
+  ggsave(file.path(output_dir, "Figure_07_Variability_Metrics.png"), 
+         fig07_forest, width = 12, height = 10, dpi = 300)
+  ggsave(file.path(output_dir, "Figure_07_Variability_Metrics.pdf"), 
+         fig07_forest, width = 12, height = 10)
   
-  ggsave(file.path(output_dir, "forest_variability_metrics.png"), 
-         forest_var, width = 10, height = 8, dpi = 300)
-  ggsave(file.path(output_dir, "forest_variability_metrics.pdf"), 
-         forest_var, width = 10, height = 8)
-  
-  cat("  Saved: forest_variability_metrics.png/pdf\n")
-  
-} else {
-  cat("  No variability metrics data to plot\n")
+  cat("  Saved: Figure_07_Variability_Metrics.png/pdf\n")
 }
-
-# ============================================================================
-# FOREST PLOT 3: COMBINED (ALL METRICS)
-# ============================================================================
-
-cat("\n", rep("=", 70), "\n")
-cat("CREATING COMBINED FOREST PLOT\n")
-cat(rep("=", 70), "\n\n")
-
-combined_df <- plot_data %>%
-  filter(!is.na(coefficient))
-
-if (nrow(combined_df) > 0) {
-  
-  has_threshold <- length(unique(combined_df$threshold)) > 1 || 
-    !all(is.na(combined_df$threshold))
-  
-  forest_combined <- ggplot(combined_df, aes(x = coefficient, y = hr_size, color = lag)) +
-    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
-    geom_errorbarh(
-      aes(xmin = cilower, xmax = ciupper),
-      height = 0.2, 
-      position = position_dodge(width = 0.7),
-      na.rm = TRUE
-    ) +
-    geom_point(position = position_dodge(width = 0.7), size = 2, na.rm = TRUE) +
-    scale_color_viridis_d(name = "Lag (years)", end = 0.8) +
-    theme_bw(base_size = 11) +
-    theme(
-      panel.grid.major.y = element_blank(),
-      strip.background = element_rect(fill = "grey90", color = NA),
-      strip.text = element_text(face = "bold", size = 9),
-      legend.position = "bottom",
-      axis.text.x = element_text(size = 9),
-      axis.text.y = element_text(size = 9)
-    ) +
-    labs(
-      title = "Forest Plot: All Sea Ice Metrics",
-      x = "Coefficient (95% CI)",
-      y = "Home Range Size (km)"
-    )
-  
-  if (has_threshold) {
-    forest_combined <- forest_combined +
-      facet_grid(metric ~ threshold, scales = "free_y")
-  } else {
-    forest_combined <- forest_combined +
-      facet_wrap(~ metric, scales = "free_y", ncol = 2)
-  }
-  
-  print(forest_combined)
-  
-  ggsave(file.path(output_dir, "forest_combined_all_metrics.png"), 
-         forest_combined, width = 14, height = 12, dpi = 300)
-  ggsave(file.path(output_dir, "forest_combined_all_metrics.pdf"), 
-         forest_combined, width = 14, height = 12)
-  
-  cat("  Saved: forest_combined_all_metrics.png/pdf\n")
-}
-
-# ============================================================================
-# FOREST PLOT 4: INDIVIDUAL METRIC PLOTS
-# ============================================================================
-
-cat("\n", rep("=", 70), "\n")
-cat("CREATING INDIVIDUAL METRIC PLOTS\n")
-cat(rep("=", 70), "\n\n")
-
-# Derive base metric names
-base_metrics <- plot_data %>%
-  pull(metric) %>%
-  str_remove(" Variability$") %>%
-  str_remove(" SD$") %>%
-  str_remove("_SD$") %>%
-  str_remove(" sd$") %>%
-  str_remove("_sd$") %>%
-  unique() %>%
-  na.omit()
-
-cat(sprintf("Creating plots for %d base metrics\n", length(base_metrics)))
-
-for (bm in base_metrics) {
-  
-  # Find all variations of this metric
-  df_sub <- plot_data %>%
-    filter(
-      metric == bm | 
-        str_detect(metric, paste0("^", bm, " (Variability|SD|sd)")) |
-        str_detect(metric, paste0("^", bm, "_(SD|sd)"))
-    ) %>%
-    filter(!is.na(coefficient))
-  
-  if (nrow(df_sub) == 0) next
-  
-  cat(sprintf("  Creating plot for: %s\n", bm))
-  
-  has_threshold <- length(unique(df_sub$threshold)) > 1 || 
-    !all(is.na(df_sub$threshold))
-  
-  p <- ggplot(df_sub, aes(x = coefficient, y = hr_size, color = lag)) +
-    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
-    geom_errorbarh(
-      aes(xmin = cilower, xmax = ciupper),
-      height = 0.2, 
-      position = position_dodge(width = 0.7),
-      na.rm = TRUE
-    ) +
-    geom_point(position = position_dodge(width = 0.7), size = 2, na.rm = TRUE) +
-    scale_color_viridis_d(name = "Lag (years)", end = 0.8) +
-    theme_bw(base_size = 12) +
-    theme(
-      panel.grid.major.y = element_blank(),
-      strip.background = element_rect(fill = "grey90", color = NA),
-      strip.text = element_text(face = "bold"),
-      axis.title.y.left = element_blank(),
-      axis.text.y.left = element_text(margin = margin(r = 10)),
-      legend.position = "bottom"
-    ) +
-    labs(
-      title = paste0("Forest Plot: ", bm),
-      x = "Coefficient (95% CI)",
-      y = "Home Range Size (km)"
-    )
-  
-  if (has_threshold) {
-    p <- p + facet_grid(metric ~ threshold, scales = "free_y", switch = "y")
-  } else {
-    p <- p + facet_wrap(~ metric, scales = "free_y", ncol = 1, switch = "y")
-  }
-  
-  print(p)
-  
-  safe_name <- gsub("[^[:alnum:]_]", "_", bm)
-  ggsave(
-    filename = file.path(output_dir, paste0("forest_", safe_name, ".png")),
-    plot = p,
-    width = 10,
-    height = 6,
-    dpi = 300
-  )
-  ggsave(
-    filename = file.path(output_dir, paste0("forest_", safe_name, ".pdf")),
-    plot = p,
-    width = 10,
-    height = 6
-  )
-}
-
 # ============================================================================
 # SUMMARY
 # ============================================================================
@@ -402,7 +287,6 @@ cat(sprintf("  Total data rows: %d\n", nrow(plot_data)))
 cat(sprintf("  Unique metrics: %d\n", n_distinct(plot_data$metric)))
 cat(sprintf("  Main metrics plots: %d\n", if(exists("forest_main")) 1 else 0))
 cat(sprintf("  Variability metrics plots: %d\n", if(exists("forest_var")) 1 else 0))
-cat(sprintf("  Individual metric plots: %d\n", length(base_metrics)))
 
 cat("\nAll plots saved to:", output_dir, "\n")
 cat("\nPlot files:\n")
