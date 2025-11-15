@@ -2947,7 +2947,7 @@ plot_data <- plot_data %>%
     metric = case_when(
       metric == "Variability" & str_detect(source_file, "Concentration") ~ "Sea Ice Concentration Variability",
       metric == "Variability" & str_detect(source_file, "Extent") ~ "Sea Ice Extent Variability",
-      metric == "Variability" & str_detect(source_file, "Duration") ~ "Duration Variability",
+      metric == "Variability" & str_detect(source_file, "Persistence") ~ "Persistence Variability",
       metric == "Variability" & str_detect(source_file, "OpenWater") ~ "Open Water Frequency Variability",
       TRUE ~ metric
     )
@@ -2976,14 +2976,14 @@ cat(sprintf("Lags: %s\n", paste(sort(unique(plot_data$lag)), collapse = ", ")))
 fig06_metrics <- c(
   "Sea Ice Concentration",
   "Sea Ice Extent", 
-  "Duration",
+  "Persistence",
   "Open Water Frequency"
 )
 
 fig07_metrics <- c(
   "Sea Ice Concentration Variability",
   "Sea Ice Extent Variability",
-  "Duration Variability", 
+  "Persistence Variability", 
   "Open Water Frequency Variability"
 )
 
