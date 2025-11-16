@@ -1423,10 +1423,6 @@ plot(hb,
      inv = function(x) 10^x)  # Inverse transformation
 
 
-
-
-
-
 # Load necessary libraries
 library(ggplot2)
 library(RColorBrewer)

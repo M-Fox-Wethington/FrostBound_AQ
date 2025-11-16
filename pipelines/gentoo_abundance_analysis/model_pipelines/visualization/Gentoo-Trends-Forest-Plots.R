@@ -393,3 +393,142 @@ for (i in seq_along(fig07_metrics)) {
 }
 
 cat(sprintf("\nSupplementary figures saved to: %s\n", supp_dir))
+
+
+
+
+# ============================================================================
+# SUPPLEMENTARY FIGURES: Paired Main + Variability Metric Plots
+# ============================================================================
+cat("\n", rep("=", 70), "\n")
+cat("CREATING SUPPLEMENTARY PAIRED METRIC PLOTS\n")
+cat(rep("=", 70), "\n\n")
+
+# Create supplementary directory
+supp_dir <- file.path(output_dir, "Supplementary")
+dir.create(supp_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Define metric pairs (Main + Variability)
+metric_pairs <- list(
+  list(
+    main = "Sea Ice Concentration",
+    var = "Sea Ice Concentration Variability",
+    short_name = "SIC"
+  ),
+  list(
+    main = "Sea Ice Extent",
+    var = "Sea Ice Extent Variability",
+    short_name = "Extent"
+  ),
+  list(
+    main = "Persistence",
+    var = "Persistence Variability",
+    short_name = "Persistence"
+  ),
+  list(
+    main = "Open Water Frequency",
+    var = "Open Water Frequency Variability",
+    short_name = "OpenWater"
+  )
+)
+
+# Generate captions
+captions <- c(
+  "Figure S1. Effects of sea ice concentration (top) and sea ice concentration variability (bottom) on Gentoo penguin population growth rates across home range sizes (20 km, 40 km, 60 km), sea ice concentration thresholds (15%, 30%, 50%), and temporal lags (1-5 years). Points represent coefficient estimates from generalized least squares models with AR(1) autocorrelation structure; error bars show 95% confidence intervals. Vertical dashed line at zero indicates no effect.",
+  
+  "Figure S2. Effects of sea ice extent (top) and sea ice extent variability (bottom) on Gentoo penguin population growth rates across home range sizes (20 km, 40 km, 60 km), sea ice concentration thresholds (15%, 30%, 50%), and temporal lags (1-5 years). Points represent coefficient estimates from generalized least squares models with AR(1) autocorrelation structure; error bars show 95% confidence intervals. Vertical dashed line at zero indicates no effect.",
+  
+  "Figure S3. Effects of persistence (top) and persistence variability (bottom) on Gentoo penguin population growth rates across home range sizes (20 km, 40 km, 60 km), sea ice concentration thresholds (15%, 30%, 50%), and temporal lags (1-5 years). Persistence represents the total number of days above the threshold. Points represent coefficient estimates from generalized least squares models with AR(1) autocorrelation structure; error bars show 95% confidence intervals. Vertical dashed line at zero indicates no effect.",
+  
+  "Figure S4. Effects of open water frequency (top) and open water frequency variability (bottom) on Gentoo penguin population growth rates across home range sizes (20 km, 40 km, 60 km), sea ice concentration thresholds (15%, 30%, 50%), and temporal lags (1-5 years). Open water frequency represents the proportion of days below the threshold. Points represent coefficient estimates from generalized least squares models with AR(1) autocorrelation structure; error bars show 95% confidence intervals. Vertical dashed line at zero indicates no effect."
+)
+
+# Create paired plots
+for (i in seq_along(metric_pairs)) {
+  
+  pair <- metric_pairs[[i]]
+  
+  # Filter data for main metric
+  df_main <- main_df %>%
+    filter(metric == pair$main)
+  
+  # Filter data for variability metric
+  df_var <- var_df %>%
+    filter(metric == pair$var)
+  
+  if (nrow(df_main) == 0 | nrow(df_var) == 0) {
+    cat(sprintf("Skipping %s - insufficient data\n", pair$short_name))
+    next
+  }
+  
+  # Add panel labels
+  df_main$panel <- pair$main
+  df_var$panel <- pair$var
+  
+  # Combine data
+  df_combined <- bind_rows(df_main, df_var) %>%
+    mutate(panel = factor(panel, levels = c(pair$main, pair$var)))
+  
+  # Create plot
+  p <- ggplot(df_combined, aes(x = coefficient, y = hr_size, color = lag)) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_errorbarh(
+      aes(xmin = cilower, xmax = ciupper),
+      height = 0.2, 
+      position = position_dodge(width = 0.7),
+      na.rm = TRUE
+    ) +
+    geom_point(position = position_dodge(width = 0.7), size = 2.5, na.rm = TRUE) +
+    facet_grid(panel ~ threshold, scales = "free") +
+    scale_color_manual(name = "Lag (years)", values = lag_colors) +
+    theme_bw(base_size = 11) +
+    theme(
+      panel.grid.major.y = element_blank(),
+      panel.grid.minor = element_blank(),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      strip.text = element_text(face = "bold", size = 10),
+      strip.text.y = element_text(size = 9),
+      legend.position = "bottom",
+      legend.box.margin = margin(t = 10),
+      axis.title.x = element_text(margin = margin(t = 8)),
+      axis.title.y = element_text(margin = margin(r = 8)),
+      plot.margin = margin(15, 15, 10, 15)
+    ) +
+    labs(
+      x = "Coefficient (95% CI)",
+      y = "Home Range Size (km)"
+    )
+  
+  # Save as PDF formatted for 8.5 x 11 page
+  filename <- sprintf("Figure_S%d_%s_Paired", i, pair$short_name)
+  
+  ggsave(
+    file.path(supp_dir, paste0(filename, ".pdf")), 
+    plot = p, 
+    width = 7.5,  # Centered on 8.5" page with margins
+    height = 9,   # Fits on 11" page with margins
+    units = "in",
+    device = cairo_pdf
+  )
+  
+  ggsave(
+    file.path(supp_dir, paste0(filename, ".png")), 
+    plot = p, 
+    width = 7.5, 
+    height = 9,
+    units = "in",
+    dpi = 300
+  )
+  
+  cat(sprintf("✓ Created %s\n", filename))
+}
+
+# Write captions to file
+caption_file <- file.path(supp_dir, "Supplementary_Figure_Captions.txt")
+writeLines(captions, caption_file)
+
+cat("\n", rep("=", 70), "\n")
+cat("SUPPLEMENTARY FIGURES COMPLETE\n")
+cat(sprintf("Outputs saved to: %s\n", supp_dir))
+cat(sprintf("Captions saved to: %s\n", caption_file))
+cat(rep("=", 70), "\n\n")
