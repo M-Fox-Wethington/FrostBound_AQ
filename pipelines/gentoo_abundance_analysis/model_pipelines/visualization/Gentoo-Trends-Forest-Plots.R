@@ -205,7 +205,7 @@ if (nrow(main_df) > 0) {
       na.rm = TRUE
     ) +
     geom_point(position = position_dodge(width = 0.7), size = 2, na.rm = TRUE) +
-    facet_grid(metric ~ threshold, scales = "free_y") +
+    facet_grid(metric ~ threshold, scales = "free") +
     scale_color_manual(name = "Lag (years)", values = lag_colors) +
     theme_bw(base_size = 12) +
     theme(
@@ -274,25 +274,122 @@ if (nrow(var_df) > 0) {
   cat("  Saved: Figure_07_Variability_Metrics.png/pdf\n")
 }
 # ============================================================================
-# SUMMARY
+# 
+# ============================================================================
+
+
+
+# ============================================================================
+# SUPPLEMENTARY FIGURES: Individual Metric Plots (3 columns × 1 row)
 # ============================================================================
 
 cat("\n", rep("=", 70), "\n")
-cat("FOREST PLOT GENERATION COMPLETE!\n")
+cat("CREATING SUPPLEMENTARY INDIVIDUAL METRIC PLOTS\n")
 cat(rep("=", 70), "\n\n")
 
-cat("Summary:\n")
-cat(sprintf("  Total CSV files processed: %d\n", length(csv_files)))
-cat(sprintf("  Total data rows: %d\n", nrow(plot_data)))
-cat(sprintf("  Unique metrics: %d\n", n_distinct(plot_data$metric)))
-cat(sprintf("  Main metrics plots: %d\n", if(exists("forest_main")) 1 else 0))
-cat(sprintf("  Variability metrics plots: %d\n", if(exists("forest_var")) 1 else 0))
+# Create supplementary directory
+supp_dir <- file.path(output_dir, "Supplementary")
+dir.create(supp_dir, showWarnings = FALSE, recursive = TRUE)
 
-cat("\nAll plots saved to:", output_dir, "\n")
-cat("\nPlot files:\n")
-cat("  - forest_main_metrics.png/pdf\n")
-cat("  - forest_variability_metrics.png/pdf\n")
-cat("  - forest_combined_all_metrics.png/pdf\n")
-cat("  - forest_[metric_name].png/pdf (individual)\n")
+# ── Main Metrics Supplementary Figures ──────────────────────────────────
 
-cat("\n", rep("=", 70), "\n")
+for (i in seq_along(fig06_metrics)) {
+  
+  metric_name <- fig06_metrics[i]
+  
+  df_metric <- main_df %>%
+    filter(metric == metric_name)
+  
+  if (nrow(df_metric) == 0) next
+  
+  p <- ggplot(df_metric, aes(x = coefficient, y = hr_size, color = lag)) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_errorbarh(
+      aes(xmin = cilower, xmax = ciupper),
+      height = 0.2, 
+      position = position_dodge(width = 0.7),
+      na.rm = TRUE
+    ) +
+    geom_point(position = position_dodge(width = 0.7), size = 3, na.rm = TRUE) +
+    facet_grid(. ~ threshold, scales = "free_y") +
+    scale_color_manual(name = "Lag (years)", values = lag_colors) +
+    theme_bw(base_size = 14) +
+    theme(
+      panel.grid.major.y = element_blank(),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "bottom",
+      axis.title.x = element_text(margin = margin(t = 12)),
+      axis.title.y = element_text(margin = margin(r = 12)),
+      plot.title = element_text(face = "bold", size = 14)
+    ) +
+    labs(
+      title = metric_name,
+      x = "Coefficient (95% CI)",
+      y = "Home Range Size (km)"
+    )
+  
+  print(p)
+  
+  safe_name <- sprintf("Supp_Figure_%02d_%s", i, gsub("[^[:alnum:]_]", "_", metric_name))
+  
+  ggsave(file.path(supp_dir, paste0(safe_name, ".png")), 
+         p, width = 12, height = 5, dpi = 300)
+  ggsave(file.path(supp_dir, paste0(safe_name, ".pdf")), 
+         p, width = 12, height = 5)
+  
+  cat(sprintf("  Saved: %s\n", safe_name))
+}
+
+# ── Variability Metrics Supplementary Figures ───────────────────────────
+
+for (i in seq_along(fig07_metrics)) {
+  
+  metric_name <- fig07_metrics[i]
+  metric_display <- str_remove(metric_name, " Variability$")
+  
+  df_metric <- var_df %>%
+    filter(metric == metric_name)
+  
+  if (nrow(df_metric) == 0) next
+  
+  p <- ggplot(df_metric, aes(x = coefficient, y = hr_size, color = lag)) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "grey50") +
+    geom_errorbarh(
+      aes(xmin = cilower, xmax = ciupper),
+      height = 0.2, 
+      position = position_dodge(width = 0.7),
+      na.rm = TRUE
+    ) +
+    geom_point(position = position_dodge(width = 0.7), size = 3, na.rm = TRUE) +
+    facet_grid(. ~ threshold, scales = "free") +
+    scale_color_manual(name = "Lag (years)", values = lag_colors) +
+    theme_bw(base_size = 14) +
+    theme(
+      panel.grid.major.y = element_blank(),
+      strip.background = element_rect(fill = "grey90", color = NA),
+      strip.text = element_text(face = "bold", size = 12),
+      legend.position = "bottom",
+      axis.title.x = element_text(margin = margin(t = 12)),
+      axis.title.y = element_text(margin = margin(r = 12)),
+      plot.title = element_text(face = "bold", size = 14)
+    ) +
+    labs(
+      title = paste0(metric_display, " (Variability)"),
+      x = "Coefficient (95% CI)",
+      y = "Home Range Size (km)"
+    )
+  
+  print(p)
+  
+  safe_name <- sprintf("Supp_Figure_%02d_%s", i + 4, gsub("[^[:alnum:]_]", "_", metric_display))
+  
+  ggsave(file.path(supp_dir, paste0(safe_name, ".png")), 
+         p, width = 12, height = 5, dpi = 300)
+  ggsave(file.path(supp_dir, paste0(safe_name, ".pdf")), 
+         p, width = 12, height = 5)
+  
+  cat(sprintf("  Saved: %s\n", safe_name))
+}
+
+cat(sprintf("\nSupplementary figures saved to: %s\n", supp_dir))
