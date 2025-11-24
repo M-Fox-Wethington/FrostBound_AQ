@@ -683,6 +683,36 @@ print(diff_summary, n = Inf, width = Inf)
 as.data.frame(diff_summary)
 
 
+library(dplyr)
+library(readr)
+library(tibble)
+
+pub_diff_summary <- tibble(
+  Comparison                           = c("Harmonized - AMSR",
+                                           "Harmonized - NSIDC"),
+  Mean_diff_winter_extent_km2          = c(diff_summary$Mean_Diff_AMSR,
+                                           diff_summary$Mean_Diff_NSIDC),
+  Median_diff_winter_extent_km2        = c(diff_summary$Median_Diff_AMSR,
+                                           diff_summary$Median_Diff_NSIDC),
+  IQR_diff_winter_extent_km2           = c(diff_summary$IQR_Diff_AMSR,
+                                           diff_summary$IQR_Diff_NSIDC),
+  P5_diff_winter_extent_km2            = c(diff_summary$P5_Diff_AMSR,
+                                           diff_summary$P5_Diff_NSIDC),
+  P25_diff_winter_extent_km2           = c(diff_summary$P25_Diff_AMSR,
+                                           diff_summary$P25_Diff_NSIDC),
+  P75_diff_winter_extent_km2           = c(diff_summary$P75_Diff_AMSR,
+                                           diff_summary$P75_Diff_NSIDC),
+  P95_diff_winter_extent_km2           = c(diff_summary$P95_Diff_AMSR,
+                                           diff_summary$P95_Diff_NSIDC)
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 0)))
+
+print(pub_diff_summary, width = Inf)
+
+out_dir  <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/dataset_harmonization/results"
+out_file <- file.path(out_dir, "winter_extent_difference_summary_km2.csv")
+
+write_csv(pub_diff_summary, out_file)
 
 # Calculate annual statistics using the correct data structure
 stats_summary <- bind_rows(amsr_stats, nsidc_stats, nsidc_harmonized_stats) %>%
