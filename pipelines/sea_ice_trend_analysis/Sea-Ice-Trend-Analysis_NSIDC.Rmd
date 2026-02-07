@@ -62,7 +62,7 @@ calculate_stack_stats <- function(file_path) {
 }
 
 # Process all files
-chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif"
+chunk_dir <- "C:\Users\michael.wethington.BRILOON\OneDrive - Biodiversity Research Institute\Documents\Manuscripts - Antarctica\FrostBound_AQ\Datasets\dataset-harmonization\nsidc_12_5km_harmonized_1979-2023.tif"
 chunk_files <- list.files(chunk_dir, pattern = "\\.tif$", full.names = TRUE)
 
 daily_df <- lapply(chunk_files, function(file) {
@@ -487,98 +487,6 @@ for (period in c("1979-2024", "2010-2024")) {
 }
 ```
 
-# PART 5: SOUTHERN OSCILLATION INDEX ANALYSIS
-
-```{r soi_analysis}
-# Load sea ice data
-nsidc_metrics <- readRDS(file.path(output_dir, "Harmonized_12km_Daily_Metrics.rds"))
-
-winter_metrics <- nsidc_metrics %>%
-  mutate(Year = year(Date), Month = month(Date)) %>%
-  filter(Month %in% c(6, 7, 8, 9))
-
-monthly_averages <- winter_metrics %>%
-  group_by(Year, Month, Region) %>%
-  summarise(
-    mean_extent = mean(IceExtent_km, na.rm = TRUE), 
-    sd_extent = sd(IceExtent_km, na.rm = TRUE), 
-    .groups = 'drop'
-  ) %>%
-  mutate(Time = as.numeric(Year) + (Month - 1) / 12)
-
-# Load SOI data
-url <- "https://www.cpc.ncep.noaa.gov/data/indices/soi"
-soi_raw <- GET(url)
-soi_text <- content(soi_raw, "text")
-soi_lines <- strsplit(soi_text, "\n")[[1]]
-
-standardized_soi_start <- grep("STANDARDIZED    DATA", soi_lines)
-soi_standardized_lines <- soi_lines[(standardized_soi_start + 3):length(soi_lines)]
-soi_standardized_lines <- soi_standardized_lines[!grepl("-999.9", soi_standardized_lines)]
-
-soi_data <- read.table(text = soi_standardized_lines, fill = TRUE, stringsAsFactors = FALSE)
-colnames(soi_data) <- c("Year", month.abb)
-
-soi_data_long <- soi_data %>%
-  mutate(Year = as.integer(Year)) %>%
-  pivot_longer(-Year, names_to = "Month", values_to = "SOI") %>%
-  mutate(
-    Month = match(Month, month.abb), 
-    Year = as.integer(Year),
-    SOI = as.numeric(SOI)
-  ) %>%
-  filter(!is.na(SOI))
-
-# Merge and calculate correlations
-merged_data <- monthly_averages %>%
-  inner_join(soi_data_long, by = c("Year", "Month")) %>%
-  distinct()
-
-correlation_results <- merged_data %>%
-  group_by(Region, Month) %>%
-  summarise(
-    correlation = cor(mean_extent, SOI, use = "complete.obs"),
-    cor_test = list(cor.test(mean_extent, SOI)),
-    p.value = cor_test[[1]]$p.value,
-    conf.low = cor_test[[1]]$conf.int[1],
-    conf.high = cor_test[[1]]$conf.int[2],
-    .groups = 'drop'
-  )
-
-# Visualize correlations
-ggplot(correlation_results, aes(x = factor(Month, levels = 6:9), y = correlation, fill = Region)) +
-  geom_bar(stat = "identity", position = position_dodge(0.9)) +
-  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, position = position_dodge(0.9)) +
-  geom_text(aes(label = round(correlation, 2)), vjust = -1.5, position = position_dodge(0.9)) +
-  scale_fill_brewer(palette = "Set3") +
-  labs(
-    title = "Correlation between SOI and Sea Ice Extent by Region and Month",
-    x = "Month", 
-    y = "Correlation"
-  ) +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5), legend.position = "bottom")
-
-# Linear regression analysis
-regression_results <- merged_data %>%
-  group_by(Region, Month) %>%
-  do(tidy(lm(mean_extent ~ SOI, data = .)))
-
-soi_coefficients <- regression_results %>% filter(term == "SOI")
-
-# Plot SOI effects
-ggplot(soi_coefficients, aes(x = factor(Month), y = estimate)) +
-  geom_point(size = 3) +
-  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
-  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
-  facet_wrap(~ Region, scales = "free_y") +
-  labs(
-    title = "Effect of SOI on Sea Ice Extent Across Regions and Months",
-    x = "Month",
-    y = "SOI Coefficient Estimate"
-  ) +
-  theme_minimal()
-```
 
 # PART 6: TREND VISUALIZATION
 
@@ -664,8 +572,9 @@ analyze_sea_ice_spatial <- function(start_year, end_year, use_mask = TRUE,
   
   # Define paths
   chunk_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/tif"
-  chunk_files <- list.files(chunk_dir, pattern = "\\.tif$", full.names = TRUE)
-  study_area_shapefile <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gis-layers/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
+  chunk_files <- list.files(chunk_dir, pattern = "//.tif$", full.names = TRUE)
+
+  study_area_shapefile <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/study-area/shp/Frostbound_Study_Areas_EPSG_3976.shp"
   
   if (use_mask) {
     study_area <- vect(study_area_shapefile)
@@ -848,4 +757,98 @@ analyze_sea_ice_spatial <- function(start_year, end_year, use_mask = TRUE,
 #                        report_metrics = c("concentration", "duration", "persistence"))
 ```
 
+
+
+# PART : SOUTHERN OSCILLATION INDEX ANALYSIS
+
+```{r soi_analysis}
+# Load sea ice data
+nsidc_metrics <- readRDS(file.path(output_dir, "Harmonized_12km_Daily_Metrics.rds"))
+
+winter_metrics <- nsidc_metrics %>%
+  mutate(Year = year(Date), Month = month(Date)) %>%
+  filter(Month %in% c(6, 7, 8, 9))
+
+monthly_averages <- winter_metrics %>%
+  group_by(Year, Month, Region) %>%
+  summarise(
+    mean_extent = mean(IceExtent_km, na.rm = TRUE), 
+    sd_extent = sd(IceExtent_km, na.rm = TRUE), 
+    .groups = 'drop'
+  ) %>%
+  mutate(Time = as.numeric(Year) + (Month - 1) / 12)
+
+# Load SOI data
+url <- "https://www.cpc.ncep.noaa.gov/data/indices/soi"
+soi_raw <- GET(url)
+soi_text <- content(soi_raw, "text")
+soi_lines <- strsplit(soi_text, "\n")[[1]]
+
+standardized_soi_start <- grep("STANDARDIZED    DATA", soi_lines)
+soi_standardized_lines <- soi_lines[(standardized_soi_start + 3):length(soi_lines)]
+soi_standardized_lines <- soi_standardized_lines[!grepl("-999.9", soi_standardized_lines)]
+
+soi_data <- read.table(text = soi_standardized_lines, fill = TRUE, stringsAsFactors = FALSE)
+colnames(soi_data) <- c("Year", month.abb)
+
+soi_data_long <- soi_data %>%
+  mutate(Year = as.integer(Year)) %>%
+  pivot_longer(-Year, names_to = "Month", values_to = "SOI") %>%
+  mutate(
+    Month = match(Month, month.abb), 
+    Year = as.integer(Year),
+    SOI = as.numeric(SOI)
+  ) %>%
+  filter(!is.na(SOI))
+
+# Merge and calculate correlations
+merged_data <- monthly_averages %>%
+  inner_join(soi_data_long, by = c("Year", "Month")) %>%
+  distinct()
+
+correlation_results <- merged_data %>%
+  group_by(Region, Month) %>%
+  summarise(
+    correlation = cor(mean_extent, SOI, use = "complete.obs"),
+    cor_test = list(cor.test(mean_extent, SOI)),
+    p.value = cor_test[[1]]$p.value,
+    conf.low = cor_test[[1]]$conf.int[1],
+    conf.high = cor_test[[1]]$conf.int[2],
+    .groups = 'drop'
+  )
+
+# Visualize correlations
+ggplot(correlation_results, aes(x = factor(Month, levels = 6:9), y = correlation, fill = Region)) +
+  geom_bar(stat = "identity", position = position_dodge(0.9)) +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, position = position_dodge(0.9)) +
+  geom_text(aes(label = round(correlation, 2)), vjust = -1.5, position = position_dodge(0.9)) +
+  scale_fill_brewer(palette = "Set3") +
+  labs(
+    title = "Correlation between SOI and Sea Ice Extent by Region and Month",
+    x = "Month", 
+    y = "Correlation"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5), legend.position = "bottom")
+
+# Linear regression analysis
+regression_results <- merged_data %>%
+  group_by(Region, Month) %>%
+  do(tidy(lm(mean_extent ~ SOI, data = .)))
+
+soi_coefficients <- regression_results %>% filter(term == "SOI")
+
+# Plot SOI effects
+ggplot(soi_coefficients, aes(x = factor(Month), y = estimate)) +
+  geom_point(size = 3) +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), width = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  facet_wrap(~ Region, scales = "free_y") +
+  labs(
+    title = "Effect of SOI on Sea Ice Extent Across Regions and Months",
+    x = "Month",
+    y = "SOI Coefficient Estimate"
+  ) +
+  theme_minimal()
+```
 
