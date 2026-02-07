@@ -17,7 +17,7 @@ library(xtable)     # for LaTeX table output
 library(scales)     # for better axis formatting
 
 # Set output directory
-output_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/soi-analysis-results"
+output_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/results/soi"
 
 # Create directory if it doesn't exist
 if (!dir.exists(output_dir)) {
@@ -27,7 +27,7 @@ if (!dir.exists(output_dir)) {
 ###############################################################################
 # Define Data Directory and Load Data
 ###############################################################################
-data_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ_temporary/gentoo-abundance-model/"
+data_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/data/data/gentoo-abundance-model/inputs"
 gentoo_params <- read_csv(file.path(data_dir, "modeled_gentoo_parameters.csv"))
 str(gentoo_params)
 
@@ -532,148 +532,149 @@ latex_code <- capture.output(print(latex_table,
 
 writeLines(latex_code, file.path(output_dir, "soi_table_latex.tex"))
 
-###############################################################################
-# Comprehensive results summary
-###############################################################################
-cat("Creating comprehensive summary report...\n")
-summary_file <- file.path(output_dir, "soi_analysis_summary.txt")
-sink(summary_file)
-
-cat("\n\nSOI ANALYSIS RESULTS SUMMARY\n")
-cat("============================\n\n")
-
-cat("1. Best models by AIC:\n")
-cat("   Lag 5: AIC =", round(model_summary$AIC[5], 1), "\n")
-cat("   Lag 1: AIC =", round(model_summary$AIC[1], 1), "\n\n")
-
-cat("2. SOI effect on Gentoo growth (1-year lag):\n")
-cat("   Coefficient =", round(model_summary$Coefficient[1], 4), 
-    "±", round(model_summary$StdError[1], 4), "\n")
-cat("   t-value =", round(model_summary$tValue[1], 2), 
-    ", p-value =", format.pval(model_summary$pValue[1], digits = 3), "\n\n")
-
-cat("3. SOI effect on Gentoo growth (5-year lag):\n")
-cat("   Coefficient =", round(model_summary$Coefficient[5], 4), 
-    "±", round(model_summary$StdError[5], 4), "\n")
-cat("   t-value =", round(model_summary$tValue[5], 2), 
-    ", p-value =", format.pval(model_summary$pValue[5], digits = 3), "\n\n")
-
-cat("4. Random effects structure:\n")
-cat("   Colony-specific intercept SD =", 
-    round(as.numeric(VarCorr(model_random_intercept)[1, 2]), 4), "\n")
-cat("   Residual SD =", 
-    round(as.numeric(VarCorr(model_random_intercept)[2, 2]), 4), "\n\n")
-
-cat("5. Interpretation:\n")
-if (model_summary$pValue[1] < 0.05) {
-  cat("   Positive SOI values (La Niña conditions) are associated with\n")
-  cat("   increased Gentoo penguin growth rates in the following year.\n")
-  cat("   For each unit increase in SOI, growth rates increase by approximately\n")
-  cat("  ", round(model_summary$Coefficient[1], 3), "units.\n\n")
-} else {
-  cat("   No significant relationship between SOI and growth rates at lag 1.\n\n")
-}
-
-cat("6. Random slopes vs. random intercepts:\n")
-cat("   The random slopes model (AIC =", round(AIC(model_lme_slopes), 1), 
-    ") performs slightly better than\n")
-cat("   the random intercepts model (AIC =", round(AIC(model_random_intercept), 1), ").\n")
-cat("   The correlation between random intercepts and slopes is", 
-    round(VarCorr(model_lme_slopes)[3, 2], 3), ".\n\n")
-
-cat("This analysis supports the hypothesis that large-scale climate oscillations\n")
-cat("influence Gentoo penguin population dynamics, likely through their effects\n")
-cat("on sea ice conditions along the Western Antarctic Peninsula.\n")
-
-# Modified section to fix the error:
-cat("6. Random slopes vs. random intercepts:\n")
-cat("   The random slopes model (AIC =", round(AIC(model_lme_slopes), 1), 
-    ") performs slightly better than\n")
-cat("   the random intercepts model (AIC =", round(AIC(model_random_intercept), 1), ").\n")
-
-# Instead of trying to directly access VarCorr(model_lme_slopes)[3, 2], let's extract it properly:
-vc_matrix <- VarCorr(model_lme_slopes)
-if(nrow(vc_matrix) >= 3) {
-  corr_value <- vc_matrix[3, 2]
-  cat("   The correlation between random intercepts and slopes is", 
-      round(as.numeric(corr_value), 3), ".\n\n")
-} else {
-  cat("   (Note: Correlation between random intercepts and slopes not available in this model structure)\n\n")
-}
-
-sink()
-
-# Create a nice-formatted summary table for manuscript
-key_findings <- data.frame(
-  Metric = c("SOI Effect (Lag 1)", "SOI Effect (Lag 5)", 
-             "Random Intercept SD", "AR(1) Correlation", 
-             "AIC (Lag 1 Model)", "AIC (Lag 5 Model)",
-             "AIC (Random Intercept Model)"),
-  Value = c(
-    sprintf("%.4f ± %.4f", model_summary$Coefficient[1], model_summary$StdError[1]),
-    sprintf("%.4f ± %.4f", model_summary$Coefficient[5], model_summary$StdError[5]),
-    sprintf("%.4f", as.numeric(VarCorr(model_random_intercept)[1, 2])),
-    sprintf("%.4f", as.numeric(model_random_intercept$modelStruct$corStruct)),
-    sprintf("%.1f", model_summary$AIC[1]),
-    sprintf("%.1f", model_summary$AIC[5]),
-    sprintf("%.1f", AIC(model_random_intercept))
-  ),
-  Interpretation = c(
-    ifelse(model_summary$pValue[1] < 0.05, "Significant positive effect", "Non-significant"),
-    ifelse(model_summary$pValue[5] < 0.05, "Significant negative effect", "Non-significant"),
-    "Moderate colony-level variation",
-    "Minimal temporal autocorrelation",
-    "Better than lags 2-4",
-    "Best model fit",
-    "Similar to random slopes model"
-  )
-)
-
-write.csv(key_findings, file.path(output_dir, "soi_key_findings.csv"), row.names = FALSE)
-
-# Create Nature-style table for publication
-nature_table <- xtable(
-  key_findings[, 1:2],
-  caption = "Table 1. Southern Oscillation Index effects on Gentoo penguin population growth rates.",
-  label = "tab:soi_key_findings"
-)
-
-nature_table_code <- capture.output(print(nature_table, 
-                                          include.rownames = FALSE,
-                                          caption.placement = "top"))
-writeLines(nature_table_code, file.path(output_dir, "nature_soi_table.tex"))
-
-# Output manuscript-ready results in a formatted file
-manuscript_text <- file.path(output_dir, "manuscript_text_soi.txt")
-sink(manuscript_text)
-
-cat("SOI Effects on Gentoo Penguin Population Growth Rates\n")
-cat("=====================================================\n\n")
-
-cat("Our analysis of Southern Oscillation Index (SOI) effects on Gentoo penguin population growth\n")
-cat("reveals a complex pattern of temporal relationships. Positive SOI values (La Niña conditions)\n")
-cat("are significantly associated with increased growth rates in the following year (coefficient =\n")
-cat(sprintf("%.4f ± %.4f, t = %.2f, p < 0.001", 
-            model_summary$Coefficient[1], 
-            model_summary$StdError[1],
-            model_summary$tValue[1]), "). \n\n")
-
-cat("Interestingly, we observed a 5-year lagged negative relationship (coefficient = ")
-cat(sprintf("%.4f ± %.4f, t = %.2f, p < 0.001", 
-            model_summary$Coefficient[5], 
-            model_summary$StdError[5],
-            model_summary$tValue[5]), "), \n")
-cat("suggesting a complex oscillatory pattern in SOI effects on penguin demographics. The model\n")
-cat("with 5-year lag provides the best fit (AIC = ", round(model_summary$AIC[5], 1), ") followed by the\n")
-cat("1-year lag model (AIC = ", round(model_summary$AIC[1], 1), ").\n\n")
-
-cat("These findings support the hypothesis that large-scale climate oscillations influence\n")
-cat("Gentoo penguin population dynamics through their effects on sea ice conditions.\n")
-cat("SOI-driven changes in sea ice extent and duration likely create complex demographic\n")
-cat("responses through direct effects on adult survival and indirect effects on recruitment\n")
-cat("that manifest over multiple years.\n\n")
-
-sink()
-
-cat("\nAnalysis complete. Publication-quality results saved to:", output_dir, "\n")
-cat("Enhanced Nature-style figures created and saved successfully.\n")
+# ###############################################################################
+# # Comprehensive results summary
+# ###############################################################################
+# cat("Creating comprehensive summary report...\n")
+# summary_file <- file.path(output_dir, "soi_analysis_summary.txt")
+# sink(summary_file)
+# 
+# cat("\n\nSOI ANALYSIS RESULTS SUMMARY\n")
+# cat("============================\n\n")
+# 
+# cat("1. Best models by AIC:\n")
+# cat("   Lag 5: AIC =", round(model_summary$AIC[5], 1), "\n")
+# cat("   Lag 1: AIC =", round(model_summary$AIC[1], 1), "\n\n")
+# 
+# cat("2. SOI effect on Gentoo growth (1-year lag):\n")
+# cat("   Coefficient =", round(model_summary$Coefficient[1], 4), 
+#     "±", round(model_summary$StdError[1], 4), "\n")
+# cat("   t-value =", round(model_summary$tValue[1], 2), 
+#     ", p-value =", format.pval(model_summary$pValue[1], digits = 3), "\n\n")
+# 
+# cat("3. SOI effect on Gentoo growth (5-year lag):\n")
+# cat("   Coefficient =", round(model_summary$Coefficient[5], 4), 
+#     "±", round(model_summary$StdError[5], 4), "\n")
+# cat("   t-value =", round(model_summary$tValue[5], 2), 
+#     ", p-value =", format.pval(model_summary$pValue[5], digits = 3), "\n\n")
+# 
+# cat("4. Random effects structure:\n")
+# cat("   Colony-specific intercept SD =", 
+#     round(as.numeric(VarCorr(model_random_intercept)[1, 2]), 4), "\n")
+# cat("   Residual SD =", 
+#     round(as.numeric(VarCorr(model_random_intercept)[2, 2]), 4), "\n\n")
+# 
+# cat("5. Interpretation:\n")
+# if (model_summary$pValue[1] < 0.05) {
+#   cat("   Positive SOI values (La Niña conditions) are associated with\n")
+#   cat("   increased Gentoo penguin growth rates in the following year.\n")
+#   cat("   For each unit increase in SOI, growth rates increase by approximately\n")
+#   cat("  ", round(model_summary$Coefficient[1], 3), "units.\n\n")
+# } else {
+#   cat("   No significant relationship between SOI and growth rates at lag 1.\n\n")
+# }
+# 
+# cat("6. Random slopes vs. random intercepts:\n")
+# cat("   The random slopes model (AIC =", round(AIC(model_lme_slopes), 1), 
+#     ") performs slightly better than\n")
+# cat("   the random intercepts model (AIC =", round(AIC(model_random_intercept), 1), ").\n")
+# cat("   The correlation between random intercepts and slopes is", 
+#     round(VarCorr(model_lme_slopes)[3, 2], 3), ".\n\n")
+# 
+# cat("This analysis supports the hypothesis that large-scale climate oscillations\n")
+# cat("influence Gentoo penguin population dynamics, likely through their effects\n")
+# cat("on sea ice conditions along the Western Antarctic Peninsula.\n")
+# 
+# # Modified section to fix the error:
+# cat("6. Random slopes vs. random intercepts:\n")
+# cat("   The random slopes model (AIC =", round(AIC(model_lme_slopes), 1), 
+#     ") performs slightly better than\n")
+# cat("   the random intercepts model (AIC =", round(AIC(model_random_intercept), 1), ").\n")
+# 
+# # Instead of trying to directly access VarCorr(model_lme_slopes)[3, 2], let's extract it properly:
+# vc_matrix <- VarCorr(model_lme_slopes)
+# if(nrow(vc_matrix) >= 3) {
+#   corr_value <- vc_matrix[3, 2]
+#   cat("   The correlation between random intercepts and slopes is", 
+#       round(as.numeric(corr_value), 3), ".\n\n")
+# } else {
+#   cat("   (Note: Correlation between random intercepts and slopes not available in this model structure)\n\n")
+# }
+# 
+# sink()
+# 
+# # Create a nice-formatted summary table for manuscript
+# key_findings <- data.frame(
+#   Metric = c("SOI Effect (Lag 1)", "SOI Effect (Lag 5)", 
+#              "Random Intercept SD", "AR(1) Correlation", 
+#              "AIC (Lag 1 Model)", "AIC (Lag 5 Model)",
+#              "AIC (Random Intercept Model)"),
+#   Value = c(
+#     sprintf("%.4f ± %.4f", model_summary$Coefficient[1], model_summary$StdError[1]),
+#     sprintf("%.4f ± %.4f", model_summary$Coefficient[5], model_summary$StdError[5]),
+#     sprintf("%.4f", as.numeric(VarCorr(model_random_intercept)[1, 2])),
+#     sprintf("%.4f", as.numeric(model_random_intercept$modelStruct$corStruct)),
+#     sprintf("%.1f", model_summary$AIC[1]),
+#     sprintf("%.1f", model_summary$AIC[5]),
+#     sprintf("%.1f", AIC(model_random_intercept))
+#   ),
+#   Interpretation = c(
+#     ifelse(model_summary$pValue[1] < 0.05, "Significant positive effect", "Non-significant"),
+#     ifelse(model_summary$pValue[5] < 0.05, "Significant negative effect", "Non-significant"),
+#     "Moderate colony-level variation",
+#     "Minimal temporal autocorrelation",
+#     "Better than lags 2-4",
+#     "Best model fit",
+#     "Similar to random slopes model"
+#   )
+# )
+# 
+# write.csv(key_findings, file.path(output_dir, "soi_key_findings.csv"), row.names = FALSE)
+# 
+# # Create Nature-style table for publication
+# nature_table <- xtable(
+#   key_findings[, 1:2],
+#   caption = "Table 1. Southern Oscillation Index effects on Gentoo penguin population growth rates.",
+#   label = "tab:soi_key_findings"
+# )
+# 
+# nature_table_code <- capture.output(print(nature_table, 
+#                                           include.rownames = FALSE,
+#                                           caption.placement = "top"))
+# writeLines(nature_table_code, file.path(output_dir, "nature_soi_table.tex"))
+# 
+# # Output manuscript-ready results in a formatted file
+# manuscript_text <- file.path(output_dir, "manuscript_text_soi.txt")
+# sink(manuscript_text)
+# 
+# cat("SOI Effects on Gentoo Penguin Population Growth Rates\n")
+# cat("=====================================================\n\n")
+# 
+# cat("Our analysis of Southern Oscillation Index (SOI) effects on Gentoo penguin population growth\n")
+# cat("reveals a complex pattern of temporal relationships. Positive SOI values (La Niña conditions)\n")
+# cat("are significantly associated with increased growth rates in the following year (coefficient =\n")
+# cat(sprintf("%.4f ± %.4f, t = %.2f, p < 0.001", 
+#             model_summary$Coefficient[1], 
+#             model_summary$StdError[1],
+#             model_summary$tValue[1]), "). \n\n")
+# 
+# cat("Interestingly, we observed a 5-year lagged negative relationship (coefficient = ")
+# cat(sprintf("%.4f ± %.4f, t = %.2f, p < 0.001", 
+#             model_summary$Coefficient[5], 
+#             model_summary$StdError[5],
+#             model_summary$tValue[5]), "), \n")
+# cat("suggesting a complex oscillatory pattern in SOI effects on penguin demographics. The model\n")
+# cat("with 5-year lag provides the best fit (AIC = ", round(model_summary$AIC[5], 1), ") followed by the\n")
+# cat("1-year lag model (AIC = ", round(model_summary$AIC[1], 1), ").\n\n")
+# 
+# cat("These findings support the hypothesis that large-scale climate oscillations influence\n")
+# cat("Gentoo penguin population dynamics through their effects on sea ice conditions.\n")
+# cat("SOI-driven changes in sea ice extent and duration likely create complex demographic\n")
+# cat("responses through direct effects on adult survival and indirect effects on recruitment\n")
+# cat("that manifest over multiple years.\n\n")
+# 
+# sink()
+# 
+# cat("\nAnalysis complete. Publication-quality results saved to:", output_dir, "\n")
+# cat("Enhanced Nature-style figures created and saved successfully.\n")
+# 
