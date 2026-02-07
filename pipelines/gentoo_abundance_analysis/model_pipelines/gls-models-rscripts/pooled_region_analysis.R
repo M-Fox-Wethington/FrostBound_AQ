@@ -17,8 +17,7 @@ library(patchwork)
 
 # ── CONFIGURATION ────────────────────────────────────────────────────────────
 # Define file paths (UPDATE THESE TO YOUR PATHS)
-penguin_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/data/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv"
-
+penguin_path <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/data/inputs/modeled_gentoo_parameters.csv"
 metric_files <- c(
   "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/data/gentoo-abundance-model/metric-calculation-csv/daily_sic_statistics.csv",
   "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/data/gentoo-abundance-model/metric-calculation-csv/sea_ice_duration_persistence_stats.csv"
@@ -820,7 +819,7 @@ dir.create(results_path, showWarnings = FALSE, recursive = TRUE)
 
 # Load penguin data
 cat("\nLoading penguin abundance data...\n")
-penguin_data <- fread(penguin_path)
+penguin_data <- fread(file = penguin_path)
 cat(sprintf("Loaded %d observations from %d colonies\n", 
             nrow(penguin_data), n_distinct(penguin_data$site_id)))
 

@@ -920,7 +920,7 @@ head(all_duration_persistence_stats)
 
 **Run & Visualize: GLS Regional Analysis**
 
-```{r}
+```{r Regional Analysis}
 # ============================================================================
 # Regional GLS Analysis for Gentoo Penguin Growth Rates vs Sea Ice Metrics
 # Performs SEPARATE analyses for Bransfield and Central WAP regions
@@ -1918,7 +1918,7 @@ tryCatch({
 **Create Pooled Regional Analysis**
 
 
-```{r}
+```{r Pooled Regional Analysis}
 # ============================================================================
 # COMPREHENSIVE POOLED ANALYSIS WITH VISUALIZATIONS
 # Gentoo Penguin Growth Rates vs Sea Ice Metrics
@@ -2815,7 +2815,7 @@ cat("\n", rep("=", 70), "\n")
 **Create Figures 06 and 07 (Forest Plots (Canonical))**
 
 
-```{r}
+```{r Figures 06 and 07}
 # ============================================================================
 # FOREST PLOT GENERATOR FROM CSV FILES
 # Standalone script to create publication-ready forest plots
