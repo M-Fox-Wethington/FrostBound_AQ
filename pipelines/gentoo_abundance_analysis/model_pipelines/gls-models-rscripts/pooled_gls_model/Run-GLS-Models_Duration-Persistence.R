@@ -28,7 +28,7 @@ fit_gls_models_indiv <- function(penguin_data, ice_data, metric) {
       rowwise() %>%
       mutate(overwinter_ice = get_individual_ice_metrics(year - lag, ice_data, metric)) %>%
       ungroup() %>%
-      filter(!is.na(overwinter_ice))
+      filter(!is.na(overwinter_ice) & !is.na(growth_rate) & growth_rate <= 3)
     
     if (nrow(penguin_data) < 3) next
     
@@ -120,13 +120,13 @@ run_gls_analysis <- function(penguin_abundance_data, ice_data, metrics, results_
   for (metric in names(all_gls_results_indiv)) {
     significant_gls_results_indiv[[metric]] <- Filter(Negate(is.null), all_gls_results_indiv[[metric]])
   }
-  saveRDS(significant_gls_results_indiv, file.path(results_dir, " "))
+  saveRDS(significant_gls_results_indiv, file.path(results_dir, "gls_analysis_results_indiv_Duration_Persistence.rds"))
 }
 
 # Example Usage for a Small Subset
 
 # Load Gentoo penguin data
-penguin_abundance_data <- fread("C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/data/data/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
+penguin_abundance_data <- fread("C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
 
 # Adjust the season column in the penguin abundance data
 penguin_abundance_data <- penguin_abundance_data %>%
@@ -140,7 +140,7 @@ ice_data <- fread(file.path(metric_calculation_csv, "sea_ice_duration_persistenc
 metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence")
 
 # Define the results directory
-results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/results"
+results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
 dir.create(results_dir, showWarnings = FALSE)
 
 run_gls_analysis(penguin_abundance_data, ice_data, metrics, results_dir)
@@ -153,7 +153,7 @@ library(dplyr)
 library(readr)
 
 # Define the directory containing the significant CSV files
-results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/RStudioProject/pipelines/gentoo_abundance_analysis/results"
+results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
 
 # Define the metrics to analyze
 metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence")

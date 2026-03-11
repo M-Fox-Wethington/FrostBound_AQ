@@ -3,8 +3,12 @@ library(dplyr)
 library(readr)
 library(ggplot2)
 
-# Define the directory containing the significant CSV files
-results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
+# Input: local copy of model results (avoids OneDrive sync issues)
+input_dir <- "C:/Users/michael.wethington.BRILOON/Documents/GLS_model_results"
+
+# Output: local directory for generated figures
+output_dir <- "C:/Users/michael.wethington.BRILOON/Documents/GLS_model_results/figures/duration_persistence"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Define the metrics to analyze
 metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence")
@@ -14,7 +18,7 @@ all_significant_results <- list()
 
 # Loop through each metric and read the corresponding CSV file
 for (metric in metrics) {
-  file_path <- file.path(results_dir, paste0("significant_model_results_indiv_", metric, ".csv"))
+  file_path <- file.path(input_dir, paste0("significant_model_results_indiv_", metric, ".csv"))
   
   # Check if the file exists
   if (file.exists(file_path)) {
@@ -31,7 +35,7 @@ for (metric in metrics) {
 merged_significant_results <- bind_rows(all_significant_results)
 
 # Save the merged data frame to a new CSV file
-merged_file_path <- file.path(results_dir, "merged_significant_model_results_duration_persistence.csv")
+merged_file_path <- file.path(output_dir, "merged_significant_model_results_duration_persistence.csv")
 write_csv(merged_significant_results, merged_file_path)
 
 cat("Merged CSV file saved to:", merged_file_path, "\n")
@@ -56,7 +60,7 @@ data$Lag <- recode(data$Lag,
                    'Lag_Indiv 5' = '5 Year Lag')
 
 # Function to create and save forest plots
-create_forest_plot <- function(data, metric, threshold, results_dir) {
+create_forest_plot <- function(data, metric, threshold, output_dir) {
   if (nrow(data) == 0) {
     cat("No data available for", metric, "at", threshold * 100, "% threshold\n")
     return(NULL)
@@ -77,10 +81,10 @@ create_forest_plot <- function(data, metric, threshold, results_dir) {
   print(plot)
   
   # Save the plot as PNG
-  ggsave(file.path(results_dir, paste0("forest_plot_", metric, "_", threshold * 100, "pct.png")), plot, width = 10, height = 8)
+  ggsave(file.path(output_dir, paste0("forest_plot_", metric, "_", threshold * 100, "pct.png")), plot, width = 10, height = 8)
   
   # Save the plot as PDF
-  pdf(file.path(results_dir, paste0("forest_plot_", metric, "_", threshold * 100, "pct.pdf")), width = 10, height = 8)
+  pdf(file.path(output_dir, paste0("forest_plot_", metric, "_", threshold * 100, "pct.pdf")), width = 10, height = 8)
   print(plot)
   dev.off()
 }
@@ -90,7 +94,7 @@ thresholds <- unique(data$Threshold)
 for (metric in metrics) {
   for (threshold in thresholds) {
     metric_data <- data %>% filter(Metric_Type == metric, Threshold == threshold)
-    create_forest_plot(metric_data, metric, threshold, results_dir)
+    create_forest_plot(metric_data, metric, threshold, output_dir)
   }
 }
 
@@ -110,9 +114,11 @@ combined_plot <- ggplot(data, aes(x = HomeRangeSize, y = Coefficient, color = Me
 print(combined_plot)
 
 # Save the combined plot as PNG
-ggsave(file.path(results_dir, "Figure_forest_plot_combined_metrics_thresholds_Durations-Persistence.png"), combined_plot, width = 12, height = 10)
+ggsave(file.path(output_dir, "Figure_forest_plot_combined_metrics_thresholds_Durations-Persistence.png"), combined_plot, width = 12, height = 10)
 
 # Save the combined plot as PDF
-pdf(file.path(results_dir, "Figure_forest_plot_combined_metrics_thresholds_Durations-Persistence.pdf"), width = 12, height = 10)
+pdf(file.path(output_dir, "Figure_forest_plot_combined_metrics_thresholds_Durations-Persistence.pdf"), width = 12, height = 10)
 print(combined_plot)
 dev.off()
+
+cat("\nFigures saved to:", output_dir, "\n")

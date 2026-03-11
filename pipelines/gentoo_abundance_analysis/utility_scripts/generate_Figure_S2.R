@@ -63,7 +63,8 @@ print(label_data %>% select(site_id, year, growth_rate))
 
 p <- ggplot(plot_data, aes(x = year, y = growth_rate, group = site_id)) +
   # Individual site trajectories (light, semi-transparent)
-  geom_line(alpha = 0.25, color = "steelblue", linewidth = 0.4) +
+  geom_line(alpha = 0.25, color = "steelblue", linewidth = 0.44) +
+  geom_point(alpha = 0.2, color = "steelblue", size = 0.8) +
   # Outlier peak labels
   geom_text_repel(
     data = label_data,
@@ -78,10 +79,11 @@ p <- ggplot(plot_data, aes(x = year, y = growth_rate, group = site_id)) +
   ) +
   # Formatting
   labs(
-    title = paste0("Growth Rate Trends Across ", n_sites, " Sites (1970-2023)"),
+    title = "Gentoo Colony Growth Rate Trends (1970-2023)",
     x = "Year",
     y = "Growth Rate (Current / Previous Season)"
   ) +
+  scale_x_continuous(breaks = seq(1970, 2025, by = 5)) +
   theme_minimal(base_size = 12) +
   theme(
     plot.title = element_text(face = "bold", hjust = 0.5, size = 13),

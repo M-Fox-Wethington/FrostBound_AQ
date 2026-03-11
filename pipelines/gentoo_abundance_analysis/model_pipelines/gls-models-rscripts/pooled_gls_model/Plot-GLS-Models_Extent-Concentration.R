@@ -3,14 +3,18 @@ library(ggplot2)
 library(dplyr)
 library(readr)
 
-# Define the directory containing the significant CSV files
-results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results/concentration_extent"
+# Input: local copy of model results (avoids OneDrive sync issues)
+input_dir <- "C:/Users/michael.wethington.BRILOON/Documents/GLS_model_results/concentration_extent"
+
+# Output: local directory for generated figures
+output_dir <- "C:/Users/michael.wethington.BRILOON/Documents/GLS_model_results/figures/concentration_extent"
+dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
 
 # Define the metrics to analyze
 metrics <- c("Sea Ice Concentration", "Concentration SD", "Sea Ice Extent", "Sea Ice Extent SD")
 
 # Load the data
-data <- read_csv(file.path(results_dir, "significant_model_results_indiv_ice_metrics_extent_extentsd.csv"))
+data <- read_csv(file.path(input_dir, "significant_model_results_indiv_ice_metrics_extent_extentsd.csv"))
 
 # Reorder the factor levels for HomeRangeSize and Metric
 data$HomeRangeSize <- factor(data$HomeRangeSize, levels = c("25km", "50km", "100km", "150km", "200km", "250km", "300km", "350km", "400km", "450km", "500km"))
@@ -29,7 +33,7 @@ data$Lag <- recode(data$Lag,
                    'Lag_Indiv 5' = '5 Year Lag')
 
 # Function to create and save forest plots
-create_forest_plot <- function(data, metric, results_dir) {
+create_forest_plot <- function(data, metric, output_dir) {
   if (nrow(data) == 0) {
     cat("No data available for", metric, "\n")
     return(NULL)
@@ -50,10 +54,10 @@ create_forest_plot <- function(data, metric, results_dir) {
   print(plot)
   
   # Save the plot as PNG
-  ggsave(file.path(results_dir, paste0("forest_plot_", metric, ".png")), plot, width = 10, height = 8)
+  ggsave(file.path(output_dir, paste0("forest_plot_", metric, ".png")), plot, width = 10, height = 8)
   
   # Save the plot as PDF
-  pdf(file.path(results_dir, paste0("forest_plot_", metric, ".pdf")), width = 10, height = 8)
+  pdf(file.path(output_dir, paste0("forest_plot_", metric, ".pdf")), width = 10, height = 8)
   print(plot)
   dev.off()
 }
@@ -62,7 +66,7 @@ create_forest_plot <- function(data, metric, results_dir) {
 for (metric in metrics) {
   print(metric)
   metric_data <- data %>% filter(Metric == metric)
-  create_forest_plot(metric_data, metric, results_dir)
+  create_forest_plot(metric_data, metric, output_dir)
 }
 
 # Generate the combined forest plot
@@ -81,9 +85,11 @@ combined_plot <- ggplot(data, aes(x = HomeRangeSize, y = Coefficient, color = Me
 print(combined_plot)
 
 # Save the combined plot as PNG
-ggsave(file.path(results_dir, "forest_plot_combined_metrics_Concentration-Extent.png"), combined_plot, width = 12, height = 10)
+ggsave(file.path(output_dir, "forest_plot_combined_metrics_Concentration-Extent.png"), combined_plot, width = 12, height = 10)
 
 # Save the combined plot as PDF
-pdf(file.path(results_dir, "forest_plot_combined_metrics_Concentration-Extent.pdf"), width = 12, height = 10)
+pdf(file.path(output_dir, "forest_plot_combined_metrics_Concentration-Extent.pdf"), width = 12, height = 10)
 print(combined_plot)
 dev.off()
+
+cat("\nFigures saved to:", output_dir, "\n")

@@ -128,21 +128,21 @@ run_gls_analysis <- function(penguin_abundance_data, ice_data, metrics, results_
   all_results_df_indiv <- do.call(rbind, all_results_df_indiv)
   significant_results_df_indiv <- do.call(rbind, significant_results_df_indiv)
   
-  write.csv(all_results_df_indiv, file.path(results_dir, "model_results_indiv_ice_metrics.csv"), row.names = FALSE)
-  write.csv(significant_results_df_indiv, file.path(results_dir, "significant_model_results_indiv_ice_metrics.csv"), row.names = FALSE)
+  write.csv(all_results_df_indiv, file.path(results_dir, "model_results_indiv_ice_metrics_extent_extentsd.csv"), row.names = FALSE)
+  write.csv(significant_results_df_indiv, file.path(results_dir, "significant_model_results_indiv_ice_metrics_extent_extentsd.csv"), row.names = FALSE)
   
   # Save only significant results to RDS
   significant_gls_results_indiv <- list()
   for (metric in names(all_gls_results_indiv)) {
     significant_gls_results_indiv[[metric]] <- Filter(Negate(is.null), all_gls_results_indiv[[metric]])
   }
-  saveRDS(significant_gls_results_indiv, file.path(results_dir, "gls_analysis_results_indiv.rds"))
+  saveRDS(significant_gls_results_indiv, file.path(results_dir, "gls_analysis_results_indiv_concentration_extent_extentsd.rds"))
 }
 
 ### Load Data and Run Analysis
 
 # Load Gentoo penguin data
-penguin_abundance_data <- fread("D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
+penguin_abundance_data <- fread("C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/inputs/modeled_gentoo_parameters.csv")
 
 str(penguin_abundance_data)
 
@@ -151,7 +151,7 @@ penguin_abundance_data <- penguin_abundance_data %>%
   mutate(year = 1970 + season - 1)
 
 # Load the SIC statistics
-metric_calculation_csv <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/metric-calculation-csv"
+metric_calculation_csv <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/metric-calculation-csv"
 ice_data <- fread(file.path(metric_calculation_csv, "daily_sic_statistics.csv"))
 str(ice_data)
 
@@ -160,7 +160,7 @@ str(ice_data)
 metrics <- c("mean_sic", "sd_sic", "ice_extent_km2")
 
 # Define the results directory
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
+results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results/concentration_extent"
 dir.create(results_dir, showWarnings = FALSE)
 
 # Run the GLS analysis on the full dataset
