@@ -4,7 +4,7 @@ library(readr)
 library(ggplot2)
 
 # Define the directory containing the significant CSV files
-results_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
+results_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/gentoo-abundance-model/results/model-results"
 
 # Define the metrics to analyze
 metrics <- c("mean_duration", "sd_duration", "mean_persistence", "sd_persistence")
@@ -70,7 +70,8 @@ create_forest_plot <- function(data, metric, threshold, results_dir) {
          x = "Home Range Size",
          y = "Coefficient") +
     theme_minimal() +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
   
   # Print the plot
   print(plot)
@@ -102,7 +103,8 @@ combined_plot <- ggplot(data, aes(x = HomeRangeSize, y = Coefficient, color = Me
        x = "Home Range Size",
        y = "Coefficient") +
   theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          legend.position = "none")
 
 # Print the combined plot
 print(combined_plot)
