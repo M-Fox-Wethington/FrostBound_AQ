@@ -2,9 +2,11 @@
 library(terra)
 
 # Define file paths
-amsr_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/amsr_normalized_2012-2023.tif"
-nsidc_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/normalized_rasters_2012-2023/nsidc_normalized_2012-2023.tif"
-nsidc_harmonized_path <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/complete-harmonized-dataset/nsidc_12_5km_harmonized_1979-2023.tif"
+base_dir <- "C:/Users/michael.wethington.BRILOON/OneDrive - Biodiversity Research Institute/Documents/Manuscripts - Antarctica/FrostBound_AQ/Datasets/dataset-harmonization"
+
+amsr_path <- file.path(base_dir, "normalized_rasters_2012-2023", "amsr_normalized_2012-2023.tif")
+nsidc_path <- file.path(base_dir, "normalized_rasters_2012-2023", "nsidc_normalized_2012-2023.tif")
+nsidc_harmonized_path <- file.path(base_dir, "complete-harmonized-dataset", "tif", "nsidc_12_5km_harmonized_1979-2023.tif")
 
 # Load datasets
 amsr_stack <- rast(amsr_path)
@@ -34,7 +36,7 @@ cat("Subsetting NSIDC stack for the overlapping period...\n")
 nsidc_overlap <- subset(nsidc_stack, nsidc_indices)
 
 # Define the target directory for exporting
-output_dir <- "D:/Manuscripts_localData/FrostBound_AQ/Datasets/dataset-harmonization/harmonized-dataset-comparison"
+output_dir <- file.path(base_dir, "harmonized-dataset-comparison")
 
 # Export the subsetted rasters
 cat("Exporting subsetted rasters...\n")
